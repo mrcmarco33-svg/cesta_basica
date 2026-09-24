@@ -17,6 +17,9 @@ from database.database import (
     reabrir_entrega,
     obter_consulta_retiradas,
     obter_resumo_consulta,
+    iniciar_nova_entrega,
+    obter_periodo_ativo,
+    listar_periodos,
 )
 
 from services.importador import importar_excel
@@ -78,6 +81,52 @@ valores_iniciais = {
     "matricula_cracha": None,
 }
 
+# ============================================================
+# PERÍODOS
+# ============================================================
+
+def selecionar_periodo(prefixo, label="📅 Período"):
+    periodos = listar_periodos()
+
+    if not periodos:
+        st.warning("Nenhum período encontrado.")
+        return None
+
+    periodo_ativo = obter_periodo_ativo()
+    periodo_ativo_id = periodo_ativo.get("id")
+
+    opcoes = {
+        periodo["id"]: periodo
+        for periodo in periodos
+    }
+
+    ids = list(opcoes.keys())
+
+    indice_padrao = 0
+
+    if periodo_ativo_id in ids:
+        indice_padrao = ids.index(periodo_ativo_id)
+
+    def formatar_periodo(periodo_id):
+        periodo = opcoes[periodo_id]
+
+        nome = periodo.get("nome", f"Período {periodo_id}")
+        status = periodo.get("status", "")
+        ativo = periodo.get("ativo", False)
+
+        marcador = "🟢 Ativo" if ativo else "⚪ Antigo"
+
+        return f"{nome} — {status} — {marcador}"
+
+    periodo_id_selecionado = st.selectbox(
+        label,
+        ids,
+        index=indice_padrao,
+        format_func=formatar_periodo,
+        key=f"{prefixo}_periodo_id",
+    )
+
+    return opcoes[periodo_id_selecionado]
 
 for chave, valor in valores_iniciais.items():
     if chave not in st.session_state:
@@ -419,7 +468,14 @@ with st.sidebar:
         st.caption("🔴 Administrador")
     else:
         st.caption("🟢 Operador")
+    try:
+        periodo_ativo = obter_periodo_ativo()
 
+        st.caption(
+            f"📅 Período ativo: {periodo_ativo.get('nome', '-')}"
+        )
+    except Exception:
+        st.caption("📅 Período ativo: não carregado")
     st.divider()
 
     if eh_admin:
@@ -499,6 +555,12 @@ with st.sidebar:
 def tela_terminal():
     st.title("🥫 ENTREGA DE CESTAS BÁSICAS")
     st.caption("Terminal automático de distribuição")
+        
+    periodo_ativo = obter_periodo_ativo()
+
+    st.info(
+        f"📅 Período ativo: **{periodo_ativo.get('nome', '-')}**"
+    )
     status_entrega = obter_status_entrega()
 
     if str(status_entrega.get("status", "")).upper() == "FINALIZADA":
@@ -723,31 +785,55 @@ def tela_dashboard():
 def tela_consulta():
     st.title("🔎 Consulta de retiradas")
 
-    status_entrega = obter_status_entrega()
-    resumo = obter_resumo_consulta()
+    periodo_selecionado = selecionar_periodo(
+        "consulta",
+        label="📅 Selecione o período para consulta",
+    )
+
+    if not periodo_selecionado:
+        return
+
+    periodo_id = periodo_selecionado["id"]
+
+    periodo_ativo = obter_periodo_ativo()
+    periodo_ativo_id = periodo_ativo.get("id")
 
     status_atual = str(
-        status_entrega.get("status", "ABERTA")
+        periodo_selecionado.get("status", "ABERTA")
     ).upper()
 
-    if status_atual == "FINALIZADA":
-        st.error("🔴 Entrega finalizada")
+    st.info(
+        f"Período selecionado: **{periodo_selecionado.get('nome', '-')}**"
+    )
 
-        st.caption(
-            f"Finalizada em: {status_entrega.get('data_finalizacao') or '-'}"
+    if periodo_id != periodo_ativo_id:
+        st.warning(
+            "Você está consultando um período antigo. "
+            "As ações de finalizar, reabrir e criar novo período sempre se aplicam ao período ativo."
         )
 
-        if status_entrega.get("usuario_finalizacao"):
+    if status_atual == "FINALIZADA":
+        st.error("🔴 Entrega finalizada neste período")
+
+        st.caption(
+            f"Finalizada em: {periodo_selecionado.get('data_finalizacao') or '-'}"
+        )
+
+        if periodo_selecionado.get("usuario_finalizacao"):
             st.caption(
-                f"Finalizada por: {status_entrega.get('usuario_finalizacao')}"
+                f"Finalizada por: {periodo_selecionado.get('usuario_finalizacao')}"
             )
 
-        if status_entrega.get("observacao"):
+        if periodo_selecionado.get("observacao"):
             st.info(
-                status_entrega.get("observacao")
+                periodo_selecionado.get("observacao")
             )
     else:
-        st.success("🟢 Entrega aberta")
+        st.success("🟢 Entrega aberta neste período")
+
+    resumo = obter_resumo_consulta(
+        periodo_id=periodo_id
+    )
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -808,6 +894,7 @@ def tela_consulta():
     registros = obter_consulta_retiradas(
         situacao=mapa_situacao[opcao],
         busca=busca,
+        periodo_id=periodo_id,
     )
 
     dados = []
@@ -815,6 +902,7 @@ def tela_consulta():
     for registro in registros:
         dados.append(
             {
+                "Período": periodo_selecionado.get("nome"),
                 "Situação": registro.get("situacao"),
                 "Matrícula": registro.get("matricula"),
                 "Crachá": registro.get("id_mat"),
@@ -849,7 +937,7 @@ def tela_consulta():
     st.download_button(
         "⬇️ Exportar consulta em Excel",
         data=arquivo_excel,
-        file_name="consulta_retiradas.xlsx",
+        file_name=f"consulta_retiradas_{periodo_selecionado.get('nome', 'periodo')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
         key="download_consulta_retiradas_excel",
@@ -864,7 +952,7 @@ def tela_consulta():
     st.download_button(
         "⬇️ Exportar consulta em CSV",
         data=csv,
-        file_name="consulta_retiradas.csv",
+        file_name=f"consulta_retiradas_{periodo_selecionado.get('nome', 'periodo')}.csv",
         mime="text/csv",
         use_container_width=True,
         key="download_consulta_retiradas_csv",
@@ -872,12 +960,20 @@ def tela_consulta():
 
     if eh_admin:
         st.divider()
-        st.subheader("🔒 Controle da entrega")
+        st.subheader("🔒 Controle do período ativo")
 
-        if status_atual != "FINALIZADA":
+        status_ativo = str(
+            periodo_ativo.get("status", "ABERTA")
+        ).upper()
+
+        st.info(
+            f"Período ativo atual: **{periodo_ativo.get('nome', '-')}**"
+        )
+
+        if status_ativo != "FINALIZADA":
             st.warning(
                 "Ao finalizar a entrega, o terminal ficará bloqueado "
-                "para novas retiradas."
+                "para novas retiradas no período ativo."
             )
 
             observacao = st.text_area(
@@ -887,7 +983,7 @@ def tela_consulta():
             )
 
             confirmar = st.checkbox(
-                "Confirmo que desejo finalizar a entrega.",
+                "Confirmo que desejo finalizar a entrega do período ativo.",
                 key="confirmar_finalizacao_entrega",
             )
 
@@ -908,7 +1004,8 @@ def tela_consulta():
 
         else:
             st.warning(
-                "A entrega está finalizada. Reabrir permitirá novas retiradas."
+                "A entrega do período ativo está finalizada. "
+                "Reabrir permitirá novas retiradas nesse período."
             )
 
             if st.button(
@@ -923,6 +1020,57 @@ def tela_consulta():
                 st.success("Entrega reaberta.")
                 st.rerun()
 
+        st.divider()
+        st.subheader("🆕 Novo período de entrega")
+
+        st.warning(
+            "Essa ação cria um novo período ativo. "
+            "O período atual será arquivado/finalizado e os dados antigos continuarão disponíveis para consulta."
+        )
+
+        nome_novo_periodo = st.text_input(
+            "Nome do novo período",
+            placeholder="Exemplo: Outubro/2026 ou Entrega Outubro 2026",
+            key="nome_novo_periodo",
+        )
+
+        observacao_nova_entrega = st.text_area(
+            "Observação do novo período",
+            placeholder="Exemplo: Entrega referente ao mês de outubro.",
+            key="observacao_nova_entrega",
+        )
+
+        zerar_estoque_nova_entrega = st.checkbox(
+            "Zerar estoque ao iniciar novo período",
+            value=True,
+            key="zerar_estoque_nova_entrega",
+        )
+
+        confirmar_nova_entrega = st.checkbox(
+            "Confirmo que desejo criar um novo período de entrega.",
+            key="confirmar_nova_entrega",
+        )
+
+        if st.button(
+            "🆕 Criar novo período",
+            type="primary",
+            use_container_width=True,
+            disabled=not confirmar_nova_entrega,
+            key="botao_iniciar_nova_entrega",
+        ):
+            if not nome_novo_periodo.strip():
+                st.error("Informe o nome do novo período.")
+            else:
+                iniciar_nova_entrega(
+                    usuario=st.session_state.usuario,
+                    observacao=observacao_nova_entrega,
+                    zerar_estoque=zerar_estoque_nova_entrega,
+                    nome=nome_novo_periodo,
+                )
+
+                st.success("Novo período criado com sucesso.")
+                st.rerun()
+
 # ============================================================
 # HISTÓRICO
 # ============================================================
@@ -930,12 +1078,27 @@ def tela_consulta():
 def tela_historico():
     st.title("📜 Histórico de operações")
 
+    periodo_selecionado = selecionar_periodo(
+        "historico",
+        label="📅 Selecione o período do histórico",
+    )
+
+    if not periodo_selecionado:
+        return
+
+    periodo_id = periodo_selecionado["id"]
+
+    st.info(
+        f"Histórico do período: **{periodo_selecionado.get('nome', '-')}**"
+    )
+
     registros = obter_historico(
-        limite=5000
+        limite=5000,
+        periodo_id=periodo_id,
     )
 
     if not registros:
-        st.info("Nenhuma operação registrada.")
+        st.info("Nenhuma operação registrada neste período.")
         return
 
     dados = []
@@ -943,16 +1106,17 @@ def tela_historico():
     for registro in registros:
         dados.append(
             {
-                "Data/Hora": registro["data_hora"],
-                "Identificação": registro["tipo_identificacao"],
-                "Crachá": registro["id_cracha"],
-                "Matrícula": registro["matricula"],
-                "Nome": registro["nome"],
-                "Setor": registro["setor"],
-                "Cesta Normal": registro["cesta_normal"],
-                "Cesta Especial": registro["cesta_especial"],
-                "Resultado": registro["resultado"],
-                "Motivo": registro["motivo"],
+                "Período": periodo_selecionado.get("nome"),
+                "Data/Hora": registro.get("data_hora"),
+                "Identificação": registro.get("tipo_identificacao"),
+                "Crachá": registro.get("id_cracha"),
+                "Matrícula": registro.get("matricula"),
+                "Nome": registro.get("nome"),
+                "Setor": registro.get("setor"),
+                "Cesta Normal": registro.get("cesta_normal"),
+                "Cesta Especial": registro.get("cesta_especial"),
+                "Resultado": registro.get("resultado"),
+                "Motivo": registro.get("motivo"),
             }
         )
 
@@ -1006,6 +1170,19 @@ def tela_historico():
         df,
         use_container_width=True,
         hide_index=True,
+    )
+
+    arquivo_excel = gerar_excel_relatorio(
+        df
+    )
+
+    st.download_button(
+        "⬇️ Exportar histórico em Excel",
+        data=arquivo_excel,
+        file_name=f"historico_{periodo_selecionado.get('nome', 'periodo')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key="download_historico_excel",
     )
 
 
@@ -1077,6 +1254,13 @@ def tela_estoque():
 
 def tela_importacao():
     st.title("📥 Importação de planilha")
+
+    periodo_ativo = obter_periodo_ativo()
+
+    st.success(
+        f"📅 Os dados importados serão vinculados ao período ativo: "
+        f"**{periodo_ativo.get('nome', '-')}**"
+    )
 
     st.info(
         'A planilha deve conter as abas '
@@ -1315,15 +1499,34 @@ def gerar_excel_relatorio(df):
     return arquivo
 
 
+# ============================================================
+# RELATÓRIOS
+# ============================================================
+
 def tela_relatorios():
     st.title("📑 Relatórios")
 
+    periodo_selecionado = selecionar_periodo(
+        "relatorios",
+        label="📅 Selecione o período do relatório",
+    )
+
+    if not periodo_selecionado:
+        return
+
+    periodo_id = periodo_selecionado["id"]
+
+    st.info(
+        f"Relatório do período: **{periodo_selecionado.get('nome', '-')}**"
+    )
+
     registros = obter_historico(
-        limite=10000
+        limite=10000,
+        periodo_id=periodo_id,
     )
 
     if not registros:
-        st.info("Nenhum dado disponível.")
+        st.info("Nenhum dado disponível neste período.")
         return
 
     dados = []
@@ -1331,15 +1534,16 @@ def tela_relatorios():
     for registro in registros:
         dados.append(
             {
-                "Data/Hora": registro["data_hora"],
-                "Matrícula": registro["matricula"],
-                "Crachá": registro["id_cracha"],
-                "Nome": registro["nome"],
-                "Setor": registro["setor"],
-                "Cesta Normal": registro["cesta_normal"],
-                "Cesta Especial": registro["cesta_especial"],
-                "Resultado": registro["resultado"],
-                "Motivo": registro["motivo"],
+                "Período": periodo_selecionado.get("nome"),
+                "Data/Hora": registro.get("data_hora"),
+                "Matrícula": registro.get("matricula"),
+                "Crachá": registro.get("id_cracha"),
+                "Nome": registro.get("nome"),
+                "Setor": registro.get("setor"),
+                "Cesta Normal": registro.get("cesta_normal"),
+                "Cesta Especial": registro.get("cesta_especial"),
+                "Resultado": registro.get("resultado"),
+                "Motivo": registro.get("motivo"),
             }
         )
 
@@ -1367,9 +1571,9 @@ def tela_relatorios():
     )
 
     st.download_button(
-        "⬇️ Exportar relatório em Excel",
+        "⬇️ Exportar retiradas em Excel",
         data=arquivo_excel,
-        file_name="relatorio_retiradas.xlsx",
+        file_name=f"relatorio_retiradas_{periodo_selecionado.get('nome', 'periodo')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
         key="download_relatorio_retiradas_excel",
@@ -1382,9 +1586,9 @@ def tela_relatorios():
     )
 
     st.download_button(
-        "⬇️ Exportar relatório em CSV",
+        "⬇️ Exportar retiradas em CSV",
         data=csv,
-        file_name="relatorio_retiradas.csv",
+        file_name=f"relatorio_retiradas_{periodo_selecionado.get('nome', 'periodo')}.csv",
         mime="text/csv",
         use_container_width=True,
         key="download_relatorio_retiradas_csv",

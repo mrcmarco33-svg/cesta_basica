@@ -1,4 +1,5 @@
 from services.supabase_client import obter_supabase
+from database.database import obter_periodo_ativo_id
 
 
 # ============================================================
@@ -40,7 +41,7 @@ def _cliente():
 
 
 # ============================================================
-# BUSCAS INDIVIDUAIS
+# BUSCAS INDIVIDUAIS NO PERÍODO ATIVO
 # ============================================================
 
 def buscar_por_id_cracha(id_cracha):
@@ -51,12 +52,14 @@ def buscar_por_id_cracha(id_cracha):
     if id_cracha is None:
         return None
 
+    periodo_id = obter_periodo_ativo_id()
     cliente = _cliente()
 
     resposta = (
         cliente
         .table("colaboradores")
         .select("*")
+        .eq("periodo_id", periodo_id)
         .eq("id_mat", id_cracha)
         .limit(1)
         .execute()
@@ -76,12 +79,14 @@ def buscar_por_matricula(matricula):
     if matricula_num is None:
         return None
 
+    periodo_id = obter_periodo_ativo_id()
     cliente = _cliente()
 
     resposta = (
         cliente
         .table("colaboradores")
         .select("*")
+        .eq("periodo_id", periodo_id)
         .eq("matricula_num", matricula_num)
         .limit(1)
         .execute()
@@ -101,12 +106,14 @@ def buscar_demitido(chapa):
     if chapa_num is None:
         return None
 
+    periodo_id = obter_periodo_ativo_id()
     cliente = _cliente()
 
     resposta = (
         cliente
         .table("demitidos")
         .select("*")
+        .eq("periodo_id", periodo_id)
         .eq("chapa_num", chapa_num)
         .limit(1)
         .execute()
@@ -119,7 +126,7 @@ def buscar_demitido(chapa):
 
 
 # ============================================================
-# CADASTRO DE CRACHÁ
+# CADASTRO DE CRACHÁ NO PERÍODO ATIVO
 # ============================================================
 
 def cracha_ja_cadastrado(id_cracha, ignorar_colaborador_id=None):
@@ -130,12 +137,14 @@ def cracha_ja_cadastrado(id_cracha, ignorar_colaborador_id=None):
     if id_cracha is None:
         return None
 
+    periodo_id = obter_periodo_ativo_id()
     cliente = _cliente()
 
     resposta = (
         cliente
         .table("colaboradores")
         .select("*")
+        .eq("periodo_id", periodo_id)
         .eq("id_mat", id_cracha)
         .limit(1)
         .execute()
@@ -166,6 +175,8 @@ def cadastrar_cracha(colaborador_id, id_cracha):
             "motivo": "ID do crachá inválido.",
         }
 
+    periodo_id = obter_periodo_ativo_id()
+
     duplicado = cracha_ja_cadastrado(
         id_cracha,
         ignorar_colaborador_id=colaborador_id,
@@ -175,7 +186,7 @@ def cadastrar_cracha(colaborador_id, id_cracha):
         return {
             "sucesso": False,
             "motivo": (
-                "Este crachá já está cadastrado para "
+                "Este crachá já está cadastrado neste período para "
                 f"{duplicado.get('nome', 'outro colaborador')}."
             ),
         }
@@ -190,6 +201,7 @@ def cadastrar_cracha(colaborador_id, id_cracha):
                 "id_mat": id_cracha,
             }
         )
+        .eq("periodo_id", periodo_id)
         .eq("id", colaborador_id)
         .execute()
     )
@@ -201,7 +213,7 @@ def cadastrar_cracha(colaborador_id, id_cracha):
 
 
 # ============================================================
-# IDENTIFICAÇÃO OTIMIZADA
+# IDENTIFICAÇÃO OTIMIZADA VIA RPC
 # ============================================================
 
 def _identificar_rpc(valor):
@@ -232,6 +244,10 @@ def _identificar_rpc(valor):
     return None
 
 
+# ============================================================
+# IDENTIFICAÇÃO FALLBACK
+# ============================================================
+
 def _identificar_fallback(valor):
     matricula_num = normalizar_matricula(
         valor
@@ -243,6 +259,7 @@ def _identificar_fallback(valor):
             "resultado": "Identificação inválida.",
         }
 
+    periodo_id = obter_periodo_ativo_id()
     cliente = _cliente()
 
     try:
@@ -250,6 +267,7 @@ def _identificar_fallback(valor):
             cliente
             .table("colaboradores")
             .select("*")
+            .eq("periodo_id", periodo_id)
             .or_(
                 f"matricula_num.eq.{matricula_num},id_mat.eq.{matricula_num}"
             )
@@ -311,9 +329,13 @@ def _identificar_fallback(valor):
 
     return {
         "tipo": "NAO_ENCONTRADO",
-        "resultado": "ID do crachá ou matrícula não encontrado.",
+        "resultado": "ID do crachá ou matrícula não encontrado no período ativo.",
     }
 
+
+# ============================================================
+# IDENTIFICAÇÃO PRINCIPAL
+# ============================================================
 
 def identificar(identificacao):
     if identificacao is None:
