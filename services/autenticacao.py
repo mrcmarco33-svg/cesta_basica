@@ -1,383 +1,204 @@
 import hashlib
+from datetime import datetime
 
-from database.database import conectar
+from services.supabase_client import obter_supabase
 
 
 # ============================================================
-# HASH DA SENHA
+# UTILITÁRIOS
 # ============================================================
 
-def gerar_hash_senha(
-    senha
-):
-
+def gerar_hash_senha(senha):
     return hashlib.sha256(
-        senha.encode("utf-8")
+        str(senha).encode("utf-8")
     ).hexdigest()
 
 
+def agora_data():
+    return datetime.now().strftime("%d/%m/%Y")
+
+
+def _cliente():
+    return obter_supabase()
+
+
 # ============================================================
-# INICIALIZAR USUÁRIOS
+# INICIALIZAÇÃO
 # ============================================================
 
 def inicializar_usuarios():
+    cliente = _cliente()
 
-    conexao = conectar()
-
-    try:
-
-        conexao.execute("""
-            CREATE TABLE IF NOT EXISTS usuarios (
-
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-                usuario TEXT UNIQUE NOT NULL,
-
-                nome TEXT NOT NULL,
-
-                senha TEXT NOT NULL,
-
-                perfil TEXT NOT NULL,
-
-                ativo INTEGER DEFAULT 1,
-
-                data_criacao TEXT
-
-            )
-        """)
-
-        # ----------------------------------------------------
-        # ADMINISTRADOR PADRÃO
-        # ----------------------------------------------------
-
-        admin = conexao.execute("""
-            SELECT id
-            FROM usuarios
-            WHERE usuario = ?
-            LIMIT 1
-        """, (
-            "admin",
-        )).fetchone()
-
-        if admin is None:
-
-            from database.database import agora
-
-            conexao.execute("""
-                INSERT INTO usuarios (
-
-                    usuario,
-                    nome,
-                    senha,
-                    perfil,
-                    ativo,
-                    data_criacao
-
-                )
-
-                VALUES (?, ?, ?, ?, ?, ?)
-
-            """, (
-
-                "admin",
-
-                "Administrador",
-
-                gerar_hash_senha(
-                    "admin123"
-                ),
-
-                "ADMIN",
-
-                1,
-
-                agora(),
-
-            ))
-
-        conexao.commit()
-
-    finally:
-
-        conexao.close()
-
-
-# ============================================================
-# AUTENTICAR
-# ============================================================
-
-def autenticar(
-    usuario,
-    senha
-):
-
-    usuario = str(
-        usuario
-    ).strip()
-
-    senha = str(
-        senha
+    senha_admin = gerar_hash_senha(
+        "admin123"
     )
 
+    resposta = (
+        cliente
+        .table("usuarios")
+        .select("*")
+        .eq("usuario", "admin")
+        .limit(1)
+        .execute()
+    )
+
+    if resposta.data:
+        return
+
+    (
+        cliente
+        .table("usuarios")
+        .insert(
+            {
+                "usuario": "admin",
+                "nome": "Administrador",
+                "senha": senha_admin,
+                "perfil": "ADMIN",
+                "ativo": True,
+                "data_criacao": agora_data(),
+            }
+        )
+        .execute()
+    )
+
+
+# ============================================================
+# LOGIN
+# ============================================================
+
+def autenticar(usuario, senha):
     if not usuario or not senha:
         return None
 
-    senha_hash = (
-        gerar_hash_senha(
-            senha
-        )
+    cliente = _cliente()
+
+    usuario = str(usuario).strip()
+
+    resposta = (
+        cliente
+        .table("usuarios")
+        .select("*")
+        .eq("usuario", usuario)
+        .limit(1)
+        .execute()
     )
 
-    conexao = conectar()
+    if not resposta.data:
+        return None
 
-    try:
+    registro = resposta.data[0]
 
-        registro = conexao.execute("""
-            SELECT *
-            FROM usuarios
+    if not registro.get("ativo"):
+        return None
 
-            WHERE usuario = ?
-              AND senha = ?
-              AND ativo = 1
-
-            LIMIT 1
-
-        """, (
-            usuario,
-            senha_hash,
-        )).fetchone()
-
-        return registro
-
-    finally:
-
-        conexao.close()
-
-
-# ============================================================
-# LISTAR USUÁRIOS
-# ============================================================
-
-def listar_usuarios():
-
-    conexao = conectar()
-
-    try:
-
-        return conexao.execute("""
-            SELECT
-                id,
-                usuario,
-                nome,
-                perfil,
-                ativo,
-                data_criacao
-            FROM usuarios
-            ORDER BY nome
-        """).fetchall()
-
-    finally:
-
-        conexao.close()
-
-
-# ============================================================
-# CRIAR USUÁRIO
-# ============================================================
-
-def criar_usuario(
-    usuario,
-    nome,
-    senha,
-    perfil
-):
-
-    usuario = str(
-        usuario
-    ).strip()
-
-    nome = str(
-        nome
-    ).strip()
-
-    senha = str(
+    senha_digitada = gerar_hash_senha(
         senha
     )
 
-    perfil = str(
-        perfil
-    ).strip().upper()
+    if senha_digitada != registro.get("senha"):
+        return None
 
-    if not usuario:
-
-        raise ValueError(
-            "Informe o usuário."
-        )
-
-    if not nome:
-
-        raise ValueError(
-            "Informe o nome."
-        )
-
-    if not senha:
-
-        raise ValueError(
-            "Informe a senha."
-        )
-
-    if len(senha) < 4:
-
-        raise ValueError(
-            "A senha deve possuir "
-            "pelo menos 4 caracteres."
-        )
-
-    if perfil not in (
-        "ADMIN",
-        "OPERADOR",
-    ):
-
-        raise ValueError(
-            "Perfil inválido."
-        )
-
-    conexao = conectar()
-
-    try:
-
-        existe = conexao.execute("""
-            SELECT id
-            FROM usuarios
-            WHERE usuario = ?
-            LIMIT 1
-        """, (
-            usuario,
-        )).fetchone()
-
-        if existe:
-
-            raise ValueError(
-                "Este usuário já existe."
-            )
-
-        from database.database import agora
-
-        conexao.execute("""
-            INSERT INTO usuarios (
-
-                usuario,
-                nome,
-                senha,
-                perfil,
-                ativo,
-                data_criacao
-
-            )
-
-            VALUES (?, ?, ?, ?, ?, ?)
-
-        """, (
-
-            usuario,
-            nome,
-            gerar_hash_senha(
-                senha
-            ),
-            perfil,
-            1,
-            agora(),
-
-        ))
-
-        conexao.commit()
-
-    finally:
-
-        conexao.close()
+    return registro
 
 
 # ============================================================
-# ALTERAR STATUS
+# CRUD DE USUÁRIOS
 # ============================================================
 
-def alterar_status_usuario(
-    usuario_id,
-    ativo
-):
+def listar_usuarios():
+    cliente = _cliente()
 
-    conexao = conectar()
-
-    try:
-
-        conexao.execute("""
-            UPDATE usuarios
-
-            SET ativo = ?
-
-            WHERE id = ?
-
-        """, (
-            1 if ativo else 0,
-            usuario_id,
-        ))
-
-        conexao.commit()
-
-    finally:
-
-        conexao.close()
-
-
-# ============================================================
-# ALTERAR SENHA
-# ============================================================
-
-def alterar_senha_usuario(
-    usuario_id,
-    nova_senha
-):
-
-    nova_senha = str(
-        nova_senha
+    resposta = (
+        cliente
+        .table("usuarios")
+        .select("*")
+        .order(
+            "id",
+            desc=False,
+        )
+        .execute()
     )
 
-    if not nova_senha:
+    return resposta.data or []
 
-        raise ValueError(
-            "Informe a nova senha."
+
+def criar_usuario(usuario, nome, senha, perfil):
+    if not usuario or not str(usuario).strip():
+        raise Exception("Informe o usuário.")
+
+    if not nome or not str(nome).strip():
+        raise Exception("Informe o nome.")
+
+    if not senha or not str(senha).strip():
+        raise Exception("Informe a senha.")
+
+    if perfil not in ["ADMIN", "OPERADOR"]:
+        raise Exception("Perfil inválido.")
+
+    cliente = _cliente()
+
+    usuario = str(usuario).strip()
+    nome = str(nome).strip()
+
+    existente = (
+        cliente
+        .table("usuarios")
+        .select("*")
+        .eq("usuario", usuario)
+        .limit(1)
+        .execute()
+    )
+
+    if existente.data:
+        raise Exception("Já existe um usuário com esse login.")
+
+    (
+        cliente
+        .table("usuarios")
+        .insert(
+            {
+                "usuario": usuario,
+                "nome": nome,
+                "senha": gerar_hash_senha(senha),
+                "perfil": perfil,
+                "ativo": True,
+                "data_criacao": agora_data(),
+            }
         )
+        .execute()
+    )
 
-    if len(nova_senha) < 4:
 
-        raise ValueError(
-            "A senha deve possuir "
-            "pelo menos 4 caracteres."
+def alterar_status_usuario(usuario_id, ativo):
+    cliente = _cliente()
+
+    (
+        cliente
+        .table("usuarios")
+        .update(
+            {
+                "ativo": bool(ativo),
+            }
         )
+        .eq("id", usuario_id)
+        .execute()
+    )
 
-    conexao = conectar()
 
-    try:
+def alterar_senha_usuario(usuario_id, nova_senha):
+    if not nova_senha or not str(nova_senha).strip():
+        raise Exception("Informe a nova senha.")
 
-        conexao.execute("""
-            UPDATE usuarios
+    cliente = _cliente()
 
-            SET senha = ?
-
-            WHERE id = ?
-
-        """, (
-
-            gerar_hash_senha(
-                nova_senha
-            ),
-
-            usuario_id,
-
-        ))
-
-        conexao.commit()
-
-    finally:
-
-        conexao.close()
+    (
+        cliente
+        .table("usuarios")
+        .update(
+            {
+                "senha": gerar_hash_senha(nova_senha),
+            }
+        )
+        .eq("id", usuario_id)
+        .execute()
+    )

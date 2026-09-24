@@ -1,15 +1,10 @@
 import pandas as pd
 
-from database.database import conectar
+from services.supabase_client import obter_supabase
 
-
-# ============================================================
-# CONFIGURAÇÕES
-# ============================================================
 
 ABA_COLABORADORES = "BANCO DE DADOS"
 ABA_DEMITIDOS = "Cesta demitidos"
-
 
 COLUNAS_COLABORADORES = [
     "ID Mat",
@@ -23,7 +18,6 @@ COLUNAS_COLABORADORES = [
     "Data e Hora retirada",
 ]
 
-
 COLUNAS_DEMITIDOS = [
     "CHAPA",
     "NOME",
@@ -33,305 +27,503 @@ COLUNAS_DEMITIDOS = [
 
 
 # ============================================================
-# NORMALIZAÇÃO DO ID DO CRACHÁ
+# UTILITÁRIOS
 # ============================================================
 
-def normalizar_id_cracha(valor):
-    """
-    ID Mat é tratado como número.
+def dividir_em_lotes(lista, tamanho=500):
+    for indice in range(
+        0,
+        len(lista),
+        tamanho,
+    ):
+        yield lista[
+            indice: indice + tamanho
+        ]
 
-    Exemplos:
 
-        123456        -> 123456
-        123456.0      -> 123456
-        "123456"      -> 123456
-        "000123456"   -> 123456
-        "000123456.0" -> 123456
+# ============================================================
+# NORMALIZAÇÃO
+# ============================================================
 
-    Os zeros à esquerda são ignorados.
-
-    Valores vazios ou inválidos retornam None.
-    """
-
+def normalizar_texto(valor):
     if valor is None:
         return None
 
-    try:
-        if pd.isna(valor):
-            return None
-    except (TypeError, ValueError):
-        pass
-
-    texto = str(valor).strip()
-
-    if not texto:
+    if pd.isna(valor):
         return None
 
-    try:
-        numero = int(float(texto))
-        return numero
+    texto = str(
+        valor
+    ).strip()
 
-    except (ValueError, TypeError):
+    if not texto or texto.lower() == "nan":
         return None
-
-
-# ============================================================
-# NORMALIZAÇÃO DA MATRÍCULA
-# ============================================================
-
-def normalizar_matricula(valor):
-    """
-    Matrícula é armazenada como texto.
-
-    Os zeros à esquerda são preservados no banco.
-
-    Exemplo:
-
-        000044 -> "000044"
-        000169 -> "000169"
-    """
-
-    if valor is None:
-        return ""
-
-    try:
-        if pd.isna(valor):
-            return ""
-    except (TypeError, ValueError):
-        pass
-
-    texto = str(valor).strip()
-
-    # Corrige casos em que o Excel/Pandas transforma
-    # uma matrícula numérica em algo como 44.0
-    if texto.endswith(".0"):
-
-        parte_numerica = texto[:-2]
-
-        if parte_numerica.isdigit():
-            texto = parte_numerica
 
     return texto
 
 
-# ============================================================
-# NORMALIZAÇÃO DE QUANTIDADES
-# ============================================================
-
-def normalizar_quantidade(valor):
-    """
-    Converte quantidade para inteiro.
-
-    Exemplos:
-
-        1       -> 1
-        1.0     -> 1
-        "1"     -> 1
-        "1.0"   -> 1
-        vazio   -> 0
-    """
-
-    if valor is None:
-        return 0
-
-    try:
-        if pd.isna(valor):
-            return 0
-    except (TypeError, ValueError):
-        pass
-
-    texto = str(valor).strip()
-
-    if not texto:
-        return 0
-
-    try:
-        return int(float(texto))
-
-    except (ValueError, TypeError):
-        return 0
-
-
-# ============================================================
-# NORMALIZAÇÃO DE TEXTO
-# ============================================================
-
-def normalizar_texto(valor):
-    """
-    Converte qualquer valor para texto limpo.
-    """
-
-    if valor is None:
-        return ""
-
-    try:
-        if pd.isna(valor):
-            return ""
-    except (TypeError, ValueError):
-        pass
-
-    return str(valor).strip()
-
-
-# ============================================================
-# VERIFICAR DUPLICIDADE DE ID MAT
-# ============================================================
-
-def verificar_duplicidade_id_mat(df):
-    """
-    Verifica se existem IDs de crachá duplicados
-    dentro da própria planilha.
-
-    A comparação ocorre depois da normalização.
-
-    Portanto:
-
-        000123456
-        123456
-        123456.0
-
-    serão considerados o mesmo ID.
-
-    Retorna uma lista de mensagens de erro.
-    """
-
-    erros = []
-
-    ids = []
-
-    for indice, linha in df.iterrows():
-
-        id_mat = normalizar_id_cracha(
-            linha["ID Mat"]
-        )
-
-        if id_mat is None:
-            continue
-
-        ids.append(
-            {
-                "indice": indice + 2,
-
-                "id_mat": id_mat,
-
-                "matricula": normalizar_matricula(
-                    linha["Mat"]
-                ),
-
-                "nome": normalizar_texto(
-                    linha["Nome"]
-                ),
-            }
-        )
-
-    if not ids:
-        return erros
-
-    df_ids = pd.DataFrame(ids)
-
-    duplicados = df_ids[
-        df_ids["id_mat"].duplicated(
-            keep=False
-        )
-    ]
-
-    if duplicados.empty:
-        return erros
-
-    erros.append(
-        "Foram encontrados IDs de crachá duplicados "
-        "após a normalização:"
+def normalizar_matricula_texto(valor):
+    texto = normalizar_texto(
+        valor
     )
 
-    for id_mat, grupo in duplicados.groupby(
-        "id_mat"
-    ):
+    if texto is None:
+        return None
 
-        detalhes = []
-
-        for _, registro in grupo.iterrows():
-
-            detalhes.append(
-                f"Linha {registro['indice']} | "
-                f"Matrícula: {registro['matricula']} | "
-                f"Nome: {registro['nome']}"
+    if texto.endswith(".0"):
+        try:
+            texto = str(
+                int(
+                    float(
+                        texto
+                    )
+                )
             )
+        except Exception:
+            pass
 
-        erros.append(
-            f"ID Mat {id_mat} aparece em mais de um registro:\n"
-            + "\n".join(detalhes)
+    return texto
+
+
+def normalizar_numero_busca(valor):
+    texto = normalizar_texto(
+        valor
+    )
+
+    if texto is None:
+        return None
+
+    try:
+        return int(
+            float(
+                texto
+            )
         )
+    except Exception:
+        return None
+
+
+def normalizar_id_cracha(valor):
+    return normalizar_numero_busca(
+        valor
+    )
+
+
+def normalizar_quantidade(valor):
+    texto = normalizar_texto(
+        valor
+    )
+
+    if texto is None:
+        return 0
+
+    texto_upper = texto.upper()
+
+    if texto_upper in [
+        "SIM",
+        "S",
+        "YES",
+        "X",
+        "TRUE",
+        "1",
+    ]:
+        return 1
+
+    if texto_upper in [
+        "NÃO",
+        "NAO",
+        "N",
+        "NO",
+        "FALSE",
+        "0",
+    ]:
+        return 0
+
+    try:
+        return int(
+            float(
+                texto.replace(
+                    ",",
+                    ".",
+                )
+            )
+        )
+    except Exception:
+        return 0
+
+
+# ============================================================
+# VALIDAÇÕES
+# ============================================================
+
+def validar_colunas(df, colunas, nome_aba):
+    erros = []
+
+    for coluna in colunas:
+        if coluna not in df.columns:
+            erros.append(
+                f'A aba "{nome_aba}" não possui a coluna obrigatória: {coluna}'
+            )
 
     return erros
 
 
-# ============================================================
-# VERIFICAR CONFLITOS COM O BANCO
-# ============================================================
-
-def verificar_conflitos_banco(
-    conexao,
-    registros
-):
-    """
-    Verifica conflitos de ID de crachá.
-
-    Se o ID já existir para a mesma matrícula:
-        permitido.
-
-    Se o ID já existir para outra matrícula:
-        bloqueado.
-
-    Isso evita que um crachá seja associado
-    acidentalmente a duas pessoas.
-    """
-
+def verificar_duplicidade_id_mat(df):
     erros = []
+    encontrados = {}
 
-    for registro in registros:
+    for indice, linha in df.iterrows():
+        id_mat = normalizar_id_cracha(
+            linha.get(
+                "ID Mat"
+            )
+        )
 
-        id_mat = registro["id_mat"]
-
-        matricula = registro["matricula"]
+        matricula = normalizar_matricula_texto(
+            linha.get(
+                "Mat"
+            )
+        )
 
         if id_mat is None:
             continue
 
-        existente = conexao.execute(
-            """
-            SELECT
-                id_mat,
-                matricula,
-                nome
-            FROM colaboradores
-            WHERE id_mat = ?
-            """,
-            (
-                id_mat,
+        if id_mat in encontrados:
+            erros.append(
+                "ID Mat duplicado na planilha: "
+                f"{id_mat}. Matrículas envolvidas: "
+                f"{encontrados[id_mat]} e {matricula}."
             )
-        ).fetchone()
+        else:
+            encontrados[id_mat] = matricula
 
-        if existente is None:
-            continue
+    return erros
 
-        matricula_existente = normalizar_matricula(
-            existente["matricula"]
+
+def verificar_conflitos_banco(registros):
+    cliente = obter_supabase()
+
+    erros = []
+
+    mapa_id_matricula = {}
+
+    for registro in registros:
+        id_mat = registro.get(
+            "id_mat"
         )
 
-        if matricula_existente != matricula:
+        if id_mat is None:
+            continue
 
+        mapa_id_matricula[id_mat] = registro.get(
+            "matricula"
+        )
+
+    if not mapa_id_matricula:
+        return erros
+
+    ids = list(
+        mapa_id_matricula.keys()
+    )
+
+    existentes = []
+
+    for lote in dividir_em_lotes(
+        ids,
+        500,
+    ):
+        resposta = (
+            cliente
+            .table("colaboradores")
+            .select("id,id_mat,matricula,nome")
+            .in_(
+                "id_mat",
+                lote,
+            )
+            .execute()
+        )
+
+        existentes.extend(
+            resposta.data or []
+        )
+
+    for existente in existentes:
+        id_mat = existente.get(
+            "id_mat"
+        )
+
+        matricula_existente = str(
+            existente.get(
+                "matricula"
+            )
+        )
+
+        matricula_nova = str(
+            mapa_id_matricula.get(
+                id_mat
+            )
+        )
+
+        if matricula_existente != matricula_nova:
             erros.append(
-                "CONFLITO DE ID DE CRACHÁ: "
-                f"ID Mat {id_mat} já está cadastrado "
-                f"para a matrícula "
-                f"{matricula_existente} "
-                f"({existente['nome']}), "
-                f"mas a planilha informa "
-                f"a matrícula {matricula} "
-                f"({registro['nome']})."
+                "Conflito de crachá: "
+                f"ID Mat {id_mat} já pertence à matrícula "
+                f"{matricula_existente} ({existente.get('nome')}) "
+                f"e não pode ser usado para a matrícula {matricula_nova}."
             )
 
     return erros
+
+
+# ============================================================
+# PREPARAÇÃO DOS DADOS
+# ============================================================
+
+def preparar_colaboradores(df):
+    registros = []
+    erros = []
+
+    for indice, linha in df.iterrows():
+        matricula = normalizar_matricula_texto(
+            linha.get(
+                "Mat"
+            )
+        )
+
+        if not matricula:
+            continue
+
+        registro = {
+            "id_mat": normalizar_id_cracha(
+                linha.get(
+                    "ID Mat"
+                )
+            ),
+            "matricula": matricula,
+            "matricula_num": normalizar_numero_busca(
+                linha.get(
+                    "Mat"
+                )
+            ),
+            "nome": normalizar_texto(
+                linha.get(
+                    "Nome"
+                )
+            ),
+            "setor": normalizar_texto(
+                linha.get(
+                    "Setor"
+                )
+            ),
+            "cesta_normal": normalizar_quantidade(
+                linha.get(
+                    "Cesta Normal"
+                )
+            ),
+            "cesta_especial": normalizar_quantidade(
+                linha.get(
+                    "Cesta Especial"
+                )
+            ),
+            "perde": normalizar_texto(
+                linha.get(
+                    "Perde"
+                )
+            ),
+            "confirmacao_retirada": normalizar_texto(
+                linha.get(
+                    "Confirmação de retirada"
+                )
+            ),
+            "data_hora_retirada": normalizar_texto(
+                linha.get(
+                    "Data e Hora retirada"
+                )
+            ),
+        }
+
+        registros.append(
+            registro
+        )
+
+    return registros, erros
+
+
+def preparar_demitidos(df):
+    registros = []
+
+    for indice, linha in df.iterrows():
+        chapa = normalizar_matricula_texto(
+            linha.get(
+                "CHAPA"
+            )
+        )
+
+        if not chapa:
+            continue
+
+        registro = {
+            "chapa": chapa,
+            "chapa_num": normalizar_numero_busca(
+                linha.get(
+                    "CHAPA"
+                )
+            ),
+            "nome": normalizar_texto(
+                linha.get(
+                    "NOME"
+                )
+            ),
+            "retirado": normalizar_texto(
+                linha.get(
+                    "Retirado"
+                )
+            ),
+            "data_hora": normalizar_texto(
+                linha.get(
+                    "Data e Hora"
+                )
+            ),
+        }
+
+        registros.append(
+            registro
+        )
+
+    return registros
+
+
+# ============================================================
+# BUSCA DE EXISTENTES
+# ============================================================
+
+def buscar_colaboradores_existentes_por_matricula(matriculas):
+    cliente = obter_supabase()
+
+    mapa = {}
+
+    for lote in dividir_em_lotes(
+        matriculas,
+        500,
+    ):
+        resposta = (
+            cliente
+            .table("colaboradores")
+            .select("id,matricula,id_mat")
+            .in_(
+                "matricula",
+                lote,
+            )
+            .execute()
+        )
+
+        for registro in resposta.data or []:
+            mapa[
+                str(
+                    registro.get(
+                        "matricula"
+                    )
+                )
+            ] = registro
+
+    return mapa
+
+
+# ============================================================
+# GRAVAÇÃO EM LOTE
+# ============================================================
+
+def salvar_colaboradores(registros):
+    if not registros:
+        return 0
+
+    cliente = obter_supabase()
+
+    matriculas = [
+        registro["matricula"]
+        for registro in registros
+    ]
+
+    existentes = buscar_colaboradores_existentes_por_matricula(
+        matriculas
+    )
+
+    payload = []
+
+    for registro in registros:
+        item = dict(
+            registro
+        )
+
+        matricula = str(
+            item.get(
+                "matricula"
+            )
+        )
+
+        existente = existentes.get(
+            matricula
+        )
+
+        if existente and item.get("id_mat") is None:
+            item["id_mat"] = existente.get(
+                "id_mat"
+            )
+
+        payload.append(
+            item
+        )
+
+    total = 0
+
+    for lote in dividir_em_lotes(
+        payload,
+        500,
+    ):
+        (
+            cliente
+            .table("colaboradores")
+            .upsert(
+                lote,
+                on_conflict="matricula",
+            )
+            .execute()
+        )
+
+        total += len(
+            lote
+        )
+
+    return total
+
+
+def salvar_demitidos(registros):
+    if not registros:
+        return 0
+
+    cliente = obter_supabase()
+
+    total = 0
+
+    for lote in dividir_em_lotes(
+        registros,
+        500,
+    ):
+        (
+            cliente
+            .table("demitidos")
+            .upsert(
+                lote,
+                on_conflict="chapa",
+            )
+            .execute()
+        )
+
+        total += len(
+            lote
+        )
+
+    return total
 
 
 # ============================================================
@@ -339,552 +531,101 @@ def verificar_conflitos_banco(
 # ============================================================
 
 def importar_excel(caminho_arquivo):
-
     resultado = {
-
         "colaboradores": 0,
-
         "demitidos": 0,
-
         "erros": [],
     }
 
-    conexao = None
-
     try:
-
-        # ====================================================
-        # ABRIR ARQUIVO EXCEL
-        # ====================================================
-
         excel = pd.ExcelFile(
             caminho_arquivo
         )
 
-        abas = excel.sheet_names
-
-        # ====================================================
-        # VERIFICAR ABA DOS COLABORADORES
-        # ====================================================
-
-        if ABA_COLABORADORES not in abas:
-
+        if ABA_COLABORADORES not in excel.sheet_names:
             resultado["erros"].append(
-                f'A aba "{ABA_COLABORADORES}" '
-                "não foi encontrada."
+                f'A planilha não possui a aba "{ABA_COLABORADORES}".'
             )
 
-        # ====================================================
-        # VERIFICAR ABA DOS DEMITIDOS
-        # ====================================================
-
-        if ABA_DEMITIDOS not in abas:
-
+        if ABA_DEMITIDOS not in excel.sheet_names:
             resultado["erros"].append(
-                f'A aba "{ABA_DEMITIDOS}" '
-                "não foi encontrada."
+                f'A planilha não possui a aba "{ABA_DEMITIDOS}".'
             )
 
         if resultado["erros"]:
-
             return resultado
-
-        # ====================================================
-        # LER BANCO DE DADOS
-        # ====================================================
 
         df_colaboradores = pd.read_excel(
-
-            caminho_arquivo,
-
+            excel,
             sheet_name=ABA_COLABORADORES,
-
-            dtype={
-                "Mat": str
-            }
+            dtype=str,
         )
-
-        # Limpar nomes das colunas
-
-        df_colaboradores.columns = [
-
-            str(coluna).strip()
-
-            for coluna
-            in df_colaboradores.columns
-
-        ]
-
-        # ====================================================
-        # VALIDAR COLUNAS DOS COLABORADORES
-        # ====================================================
-
-        colunas_faltantes = [
-
-            coluna
-
-            for coluna
-            in COLUNAS_COLABORADORES
-
-            if coluna
-            not in df_colaboradores.columns
-
-        ]
-
-        if colunas_faltantes:
-
-            resultado["erros"].append(
-
-                f'Colunas faltantes na aba '
-                f'"{ABA_COLABORADORES}": '
-                + ", ".join(
-                    colunas_faltantes
-                )
-            )
-
-        # ====================================================
-        # LER DEMITIDOS
-        # ====================================================
 
         df_demitidos = pd.read_excel(
-
-            caminho_arquivo,
-
+            excel,
             sheet_name=ABA_DEMITIDOS,
-
-            dtype={
-                "CHAPA": str
-            }
+            dtype=str,
         )
 
-        # Limpar nomes das colunas
-
-        df_demitidos.columns = [
-
-            str(coluna).strip()
-
-            for coluna
-            in df_demitidos.columns
-
-        ]
-
-        # ====================================================
-        # VALIDAR COLUNAS DOS DEMITIDOS
-        # ====================================================
-
-        colunas_faltantes_demitidos = [
-
-            coluna
-
-            for coluna
-            in COLUNAS_DEMITIDOS
-
-            if coluna
-            not in df_demitidos.columns
-
-        ]
-
-        if colunas_faltantes_demitidos:
-
-            resultado["erros"].append(
-
-                f'Colunas faltantes na aba '
-                f'"{ABA_DEMITIDOS}": '
-
-                + ", ".join(
-                    colunas_faltantes_demitidos
-                )
+        resultado["erros"].extend(
+            validar_colunas(
+                df_colaboradores,
+                COLUNAS_COLABORADORES,
+                ABA_COLABORADORES,
             )
+        )
+
+        resultado["erros"].extend(
+            validar_colunas(
+                df_demitidos,
+                COLUNAS_DEMITIDOS,
+                ABA_DEMITIDOS,
+            )
+        )
 
         if resultado["erros"]:
-
             return resultado
 
-        # ====================================================
-        # VALIDAR DUPLICIDADE DE ID MAT
-        # ====================================================
-
-        erros_duplicidade = (
-
+        resultado["erros"].extend(
             verificar_duplicidade_id_mat(
                 df_colaboradores
             )
-
         )
 
-        if erros_duplicidade:
+        registros_colaboradores, erros_colaboradores = preparar_colaboradores(
+            df_colaboradores
+        )
 
-            resultado["erros"].extend(
-                erros_duplicidade
-            )
+        resultado["erros"].extend(
+            erros_colaboradores
+        )
 
-            return resultado
-
-        # ====================================================
-        # PREPARAR COLABORADORES
-        # ====================================================
-
-        registros_colaboradores = []
-
-        for _, linha in df_colaboradores.iterrows():
-
-            id_mat = normalizar_id_cracha(
-                linha["ID Mat"]
-            )
-
-            matricula = normalizar_matricula(
-                linha["Mat"]
-            )
-
-            nome = normalizar_texto(
-                linha["Nome"]
-            )
-
-            setor = normalizar_texto(
-                linha["Setor"]
-            )
-
-            cesta_normal = normalizar_quantidade(
-                linha["Cesta Normal"]
-            )
-
-            cesta_especial = normalizar_quantidade(
-                linha["Cesta Especial"]
-            )
-
-            perde = normalizar_texto(
-                linha["Perde"]
-            )
-
-            confirmacao = normalizar_texto(
-                linha[
-                    "Confirmação de retirada"
-                ]
-            )
-
-            data_retirada = normalizar_texto(
-                linha[
-                    "Data e Hora retirada"
-                ]
-            )
-
-            # =================================================
-            # MATRÍCULA É O IDENTIFICADOR OBRIGATÓRIO
-            # =================================================
-
-            if not matricula:
-                continue
-
-            registros_colaboradores.append(
-
-                {
-                    "id_mat": id_mat,
-
-                    "matricula": matricula,
-
-                    "nome": nome,
-
-                    "setor": setor,
-
-                    "cesta_normal":
-                        cesta_normal,
-
-                    "cesta_especial":
-                        cesta_especial,
-
-                    "perde": perde,
-
-                    "confirmacao":
-                        confirmacao,
-
-                    "data_retirada":
-                        data_retirada,
-                }
-
-            )
-
-        # ====================================================
-        # CONECTAR AO BANCO
-        # ====================================================
-
-        conexao = conectar()
-
-        # ====================================================
-        # VERIFICAR CONFLITOS
-        # ====================================================
-
-        erros_banco = (
-
+        resultado["erros"].extend(
             verificar_conflitos_banco(
-
-                conexao,
-
                 registros_colaboradores
             )
-
         )
 
-        if erros_banco:
-
-            resultado["erros"].extend(
-                erros_banco
-            )
-
+        if resultado["erros"]:
             return resultado
 
-        cursor = conexao.cursor()
-
-        # ====================================================
-        # IMPORTAR COLABORADORES
-        # ====================================================
-
-        for registro in registros_colaboradores:
-
-            # ------------------------------------------------
-            # PRIMEIRO:
-            # verificar se a matrícula já existe
-            # ------------------------------------------------
-
-            existente = cursor.execute(
-                """
-                SELECT id
-                FROM colaboradores
-                WHERE matricula = ?
-                LIMIT 1
-                """,
-                (
-                    registro["matricula"],
-                )
-            ).fetchone()
-
-            if existente:
-
-                # --------------------------------------------
-                # ATUALIZAR
-                # --------------------------------------------
-
-                cursor.execute(
-                    """
-                    UPDATE colaboradores
-
-                    SET
-                        id_mat = ?,
-                        nome = ?,
-                        setor = ?,
-                        cesta_normal = ?,
-                        cesta_especial = ?,
-                        perde = ?,
-                        confirmacao_retirada = ?,
-                        data_hora_retirada = ?
-
-                    WHERE id = ?
-                    """,
-
-                    (
-                        registro["id_mat"],
-
-                        registro["nome"],
-
-                        registro["setor"],
-
-                        registro["cesta_normal"],
-
-                        registro["cesta_especial"],
-
-                        registro["perde"],
-
-                        registro["confirmacao"],
-
-                        registro["data_retirada"],
-
-                        existente["id"],
-                    )
-                )
-
-            else:
-
-                # --------------------------------------------
-                # NOVO CADASTRO
-                # --------------------------------------------
-
-                cursor.execute(
-                    """
-                    INSERT INTO colaboradores (
-
-                        id_mat,
-
-                        matricula,
-
-                        nome,
-
-                        setor,
-
-                        cesta_normal,
-
-                        cesta_especial,
-
-                        perde,
-
-                        confirmacao_retirada,
-
-                        data_hora_retirada
-
-                    )
-
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-
-                    (
-                        registro["id_mat"],
-
-                        registro["matricula"],
-
-                        registro["nome"],
-
-                        registro["setor"],
-
-                        registro["cesta_normal"],
-
-                        registro["cesta_especial"],
-
-                        registro["perde"],
-
-                        registro["confirmacao"],
-
-                        registro["data_retirada"],
-                    )
-                )
-
-            resultado["colaboradores"] += 1
-
-        # ====================================================
-        # IMPORTAR DEMITIDOS
-        # ====================================================
-
-        for _, linha in df_demitidos.iterrows():
-
-            chapa = normalizar_matricula(
-                linha["CHAPA"]
-            )
-
-            if not chapa:
-                continue
-
-            nome = normalizar_texto(
-                linha["NOME"]
-            )
-
-            retirado = normalizar_texto(
-                linha["Retirado"]
-            )
-
-            data_hora = normalizar_texto(
-                linha["Data e Hora"]
-            )
-
-            # ------------------------------------------------
-            # VERIFICAR SE JÁ EXISTE
-            # ------------------------------------------------
-
-            existente = cursor.execute(
-                """
-                SELECT id
-                FROM demitidos
-                WHERE chapa = ?
-                LIMIT 1
-                """,
-                (
-                    chapa,
-                )
-            ).fetchone()
-
-            if existente:
-
-                # --------------------------------------------
-                # ATUALIZAR
-                # --------------------------------------------
-
-                cursor.execute(
-                    """
-                    UPDATE demitidos
-
-                    SET
-                        nome = ?,
-                        retirado = ?,
-                        data_hora = ?
-
-                    WHERE id = ?
-                    """,
-
-                    (
-                        nome,
-
-                        retirado,
-
-                        data_hora,
-
-                        existente["id"],
-                    )
-                )
-
-            else:
-
-                # --------------------------------------------
-                # NOVO DEMITIDO
-                # --------------------------------------------
-
-                cursor.execute(
-                    """
-                    INSERT INTO demitidos (
-
-                        chapa,
-
-                        nome,
-
-                        retirado,
-
-                        data_hora
-
-                    )
-
-                    VALUES (?, ?, ?, ?)
-                    """,
-
-                    (
-                        chapa,
-
-                        nome,
-
-                        retirado,
-
-                        data_hora,
-                    )
-                )
-
-            resultado["demitidos"] += 1
-
-        # ====================================================
-        # FINALIZAR
-        # ====================================================
-
-        conexao.commit()
-
-    except Exception as erro:
-
-        if conexao is not None:
-
-            conexao.rollback()
-
-        resultado["erros"].append(
-
-            f"Erro durante a importação: {erro}"
-
+        registros_demitidos = preparar_demitidos(
+            df_demitidos
         )
 
-    finally:
+        resultado["colaboradores"] = salvar_colaboradores(
+            registros_colaboradores
+        )
 
-        if conexao is not None:
+        resultado["demitidos"] = salvar_demitidos(
+            registros_demitidos
+        )
 
-            conexao.close()
+        return resultado
 
-    return resultado
+    except Exception as erro:
+        resultado["erros"].append(
+            f"Erro ao importar planilha: {erro}"
+        )
+
+        return resultado

@@ -1,12 +1,11 @@
-from database.database import conectar
+from services.supabase_client import obter_supabase
 
 
 # ============================================================
-# NORMALIZAR ID DO CRACHÁ
+# NORMALIZAÇÃO
 # ============================================================
 
 def normalizar_id_cracha(valor):
-
     if valor is None:
         return None
 
@@ -15,26 +14,13 @@ def normalizar_id_cracha(valor):
     if not texto:
         return None
 
-    texto = texto.replace(" ", "")
-
     try:
-
         return int(float(texto))
-
-    except (
-        ValueError,
-        TypeError
-    ):
-
+    except Exception:
         return None
 
-
-# ============================================================
-# NORMALIZAR MATRÍCULA
-# ============================================================
 
 def normalizar_matricula(valor):
-
     if valor is None:
         return None
 
@@ -43,393 +29,320 @@ def normalizar_matricula(valor):
     if not texto:
         return None
 
-    texto = texto.replace(" ", "")
-
     try:
-
         return int(float(texto))
+    except Exception:
+        return None
 
-    except (
-        ValueError,
-        TypeError
+
+def _cliente():
+    return obter_supabase()
+
+
+# ============================================================
+# BUSCAS INDIVIDUAIS
+# ============================================================
+
+def buscar_por_id_cracha(id_cracha):
+    id_cracha = normalizar_id_cracha(
+        id_cracha
+    )
+
+    if id_cracha is None:
+        return None
+
+    cliente = _cliente()
+
+    resposta = (
+        cliente
+        .table("colaboradores")
+        .select("*")
+        .eq("id_mat", id_cracha)
+        .limit(1)
+        .execute()
+    )
+
+    if not resposta.data:
+        return None
+
+    return resposta.data[0]
+
+
+def buscar_por_matricula(matricula):
+    matricula_num = normalizar_matricula(
+        matricula
+    )
+
+    if matricula_num is None:
+        return None
+
+    cliente = _cliente()
+
+    resposta = (
+        cliente
+        .table("colaboradores")
+        .select("*")
+        .eq("matricula_num", matricula_num)
+        .limit(1)
+        .execute()
+    )
+
+    if not resposta.data:
+        return None
+
+    return resposta.data[0]
+
+
+def buscar_demitido(chapa):
+    chapa_num = normalizar_matricula(
+        chapa
+    )
+
+    if chapa_num is None:
+        return None
+
+    cliente = _cliente()
+
+    resposta = (
+        cliente
+        .table("demitidos")
+        .select("*")
+        .eq("chapa_num", chapa_num)
+        .limit(1)
+        .execute()
+    )
+
+    if not resposta.data:
+        return None
+
+    return resposta.data[0]
+
+
+# ============================================================
+# CADASTRO DE CRACHÁ
+# ============================================================
+
+def cracha_ja_cadastrado(id_cracha, ignorar_colaborador_id=None):
+    id_cracha = normalizar_id_cracha(
+        id_cracha
+    )
+
+    if id_cracha is None:
+        return None
+
+    cliente = _cliente()
+
+    resposta = (
+        cliente
+        .table("colaboradores")
+        .select("*")
+        .eq("id_mat", id_cracha)
+        .limit(1)
+        .execute()
+    )
+
+    if not resposta.data:
+        return None
+
+    colaborador = resposta.data[0]
+
+    if (
+        ignorar_colaborador_id is not None
+        and int(colaborador["id"]) == int(ignorar_colaborador_id)
     ):
-
         return None
 
+    return colaborador
 
-# ============================================================
-# BUSCAR POR CRACHÁ
-# ============================================================
 
-def buscar_por_id_cracha(
-    id_cracha
-):
-
-    id_normalizado = (
-        normalizar_id_cracha(
-            id_cracha
-        )
+def cadastrar_cracha(colaborador_id, id_cracha):
+    id_cracha = normalizar_id_cracha(
+        id_cracha
     )
 
-    if id_normalizado is None:
-        return None
+    if id_cracha is None:
+        return {
+            "sucesso": False,
+            "motivo": "ID do crachá inválido.",
+        }
 
-    conexao = conectar()
-
-    try:
-
-        return conexao.execute("""
-            SELECT *
-            FROM colaboradores
-            WHERE id_mat = ?
-            LIMIT 1
-        """, (
-            id_normalizado,
-        )).fetchone()
-
-    finally:
-
-        conexao.close()
-
-
-# ============================================================
-# BUSCAR POR MATRÍCULA
-# ============================================================
-
-def buscar_por_matricula(
-    matricula
-):
-
-    matricula_normalizada = (
-        normalizar_matricula(
-            matricula
-        )
+    duplicado = cracha_ja_cadastrado(
+        id_cracha,
+        ignorar_colaborador_id=colaborador_id,
     )
 
-    if matricula_normalizada is None:
-        return None
-
-    conexao = conectar()
-
-    try:
-
-        return conexao.execute("""
-            SELECT *
-            FROM colaboradores
-
-            WHERE CAST(
-                CAST(matricula AS REAL)
-                AS INTEGER
-            ) = ?
-
-            LIMIT 1
-
-        """, (
-            matricula_normalizada,
-        )).fetchone()
-
-    finally:
-
-        conexao.close()
-
-
-# ============================================================
-# BUSCAR DEMITIDO
-# ============================================================
-
-def buscar_demitido(
-    chapa
-):
-
-    chapa_normalizada = (
-        normalizar_matricula(
-            chapa
-        )
-    )
-
-    if chapa_normalizada is None:
-        return None
-
-    conexao = conectar()
-
-    try:
-
-        return conexao.execute("""
-            SELECT *
-            FROM demitidos
-
-            WHERE CAST(
-                CAST(chapa AS REAL)
-                AS INTEGER
-            ) = ?
-
-            LIMIT 1
-
-        """, (
-            chapa_normalizada,
-        )).fetchone()
-
-    finally:
-
-        conexao.close()
-
-
-# ============================================================
-# VERIFICAR CRACHÁ
-# ============================================================
-
-def cracha_ja_cadastrado(
-    id_cracha,
-    ignorar_colaborador_id=None
-):
-
-    id_normalizado = (
-        normalizar_id_cracha(
-            id_cracha
-        )
-    )
-
-    if id_normalizado is None:
-        return None
-
-    conexao = conectar()
-
-    try:
-
-        if ignorar_colaborador_id is None:
-
-            return conexao.execute("""
-                SELECT *
-                FROM colaboradores
-                WHERE id_mat = ?
-                LIMIT 1
-            """, (
-                id_normalizado,
-            )).fetchone()
-
-        return conexao.execute("""
-            SELECT *
-            FROM colaboradores
-
-            WHERE id_mat = ?
-              AND id != ?
-
-            LIMIT 1
-
-        """, (
-            id_normalizado,
-            ignorar_colaborador_id,
-        )).fetchone()
-
-    finally:
-
-        conexao.close()
-
-
-# ============================================================
-# CADASTRAR CRACHÁ
-# ============================================================
-
-def cadastrar_cracha(
-    colaborador_id,
-    id_cracha
-):
-
-    id_normalizado = (
-        normalizar_id_cracha(
-            id_cracha
-        )
-    )
-
-    if id_normalizado is None:
-
+    if duplicado:
         return {
             "sucesso": False,
             "motivo": (
-                "ID do crachá inválido."
+                "Este crachá já está cadastrado para "
+                f"{duplicado.get('nome', 'outro colaborador')}."
             ),
         }
 
-    conexao = conectar()
+    cliente = _cliente()
+
+    (
+        cliente
+        .table("colaboradores")
+        .update(
+            {
+                "id_mat": id_cracha,
+            }
+        )
+        .eq("id", colaborador_id)
+        .execute()
+    )
+
+    return {
+        "sucesso": True,
+        "motivo": "Crachá cadastrado com sucesso.",
+    }
+
+
+# ============================================================
+# IDENTIFICAÇÃO OTIMIZADA
+# ============================================================
+
+def _identificar_rpc(valor):
+    cliente = _cliente()
+
+    resposta = (
+        cliente
+        .rpc(
+            "identificar_pessoa_rpc",
+            {
+                "p_valor": str(valor).strip(),
+            },
+        )
+        .execute()
+    )
+
+    dados = resposta.data
+
+    if isinstance(dados, list):
+        if not dados:
+            return None
+
+        dados = dados[0]
+
+    if isinstance(dados, dict):
+        return dados
+
+    return None
+
+
+def _identificar_fallback(valor):
+    matricula_num = normalizar_matricula(
+        valor
+    )
+
+    if matricula_num is None:
+        return {
+            "tipo": "NAO_ENCONTRADO",
+            "resultado": "Identificação inválida.",
+        }
+
+    cliente = _cliente()
 
     try:
-
-        # ----------------------------------------------------
-        # VERIFICA DUPLICIDADE
-        # ----------------------------------------------------
-
-        existente = conexao.execute("""
-            SELECT *
-            FROM colaboradores
-
-            WHERE id_mat = ?
-              AND id != ?
-
-            LIMIT 1
-
-        """, (
-            id_normalizado,
-            colaborador_id,
-        )).fetchone()
-
-        if existente:
-
-            return {
-                "sucesso": False,
-                "motivo": (
-                    "Este crachá já está cadastrado "
-                    f"para {existente['nome']} "
-                    f"(matrícula "
-                    f"{existente['matricula']})."
-                ),
-            }
-
-        # ----------------------------------------------------
-        # BUSCA COLABORADOR
-        # ----------------------------------------------------
-
-        colaborador = conexao.execute("""
-            SELECT *
-            FROM colaboradores
-            WHERE id = ?
-            LIMIT 1
-        """, (
-            colaborador_id,
-        )).fetchone()
-
-        if colaborador is None:
-
-            return {
-                "sucesso": False,
-                "motivo": (
-                    "Colaborador não encontrado."
-                ),
-            }
-
-        # ----------------------------------------------------
-        # CADASTRA
-        # ----------------------------------------------------
-
-        conexao.execute("""
-            UPDATE colaboradores
-
-            SET id_mat = ?
-
-            WHERE id = ?
-
-        """, (
-            id_normalizado,
-            colaborador_id,
-        ))
-
-        conexao.commit()
-
-        return {
-            "sucesso": True,
-            "id_cracha": id_normalizado,
-            "nome": colaborador["nome"],
-            "matricula": colaborador["matricula"],
-        }
-
-    except Exception as erro:
-
-        conexao.rollback()
-
-        return {
-            "sucesso": False,
-            "motivo": str(erro),
-        }
-
-    finally:
-
-        conexao.close()
-
-
-# ============================================================
-# IDENTIFICAR
-# ============================================================
-
-def identificar(
-    identificacao
-):
-
-    identificacao = str(
-        identificacao
-    ).strip()
-
-    if not identificacao:
-
-        return {
-            "tipo": "ERRO",
-            "resultado": (
-                "IDENTIFICAÇÃO VAZIA"
-            ),
-        }
-
-    # ========================================================
-    # MATRÍCULA
-    # ========================================================
-
-    colaborador = buscar_por_matricula(
-        identificacao
-    )
-
-    if colaborador:
-
-        return {
-            "tipo": "COLABORADOR",
-            "dados": colaborador,
-            "identificacao": "MATRÍCULA",
-        }
-
-    # ========================================================
-    # CRACHÁ
-    # ========================================================
-
-    id_cracha = (
-        normalizar_id_cracha(
-            identificacao
-        )
-    )
-
-    if id_cracha is not None:
-
-        colaborador = (
-            buscar_por_id_cracha(
-                id_cracha
+        resposta = (
+            cliente
+            .table("colaboradores")
+            .select("*")
+            .or_(
+                f"matricula_num.eq.{matricula_num},id_mat.eq.{matricula_num}"
             )
+            .limit(10)
+            .execute()
+        )
+
+        colaboradores = resposta.data or []
+
+        for colaborador in colaboradores:
+            if colaborador.get("matricula_num") == matricula_num:
+                return {
+                    "tipo": "COLABORADOR",
+                    "identificacao": "MATRÍCULA",
+                    "dados": colaborador,
+                }
+
+        for colaborador in colaboradores:
+            if colaborador.get("id_mat") == matricula_num:
+                return {
+                    "tipo": "COLABORADOR",
+                    "identificacao": "ID CRACHÁ",
+                    "dados": colaborador,
+                }
+
+    except Exception:
+        colaborador = buscar_por_matricula(
+            valor
         )
 
         if colaborador:
-
             return {
                 "tipo": "COLABORADOR",
+                "identificacao": "MATRÍCULA",
                 "dados": colaborador,
-                "identificacao": "ID CRACHÁ",
             }
 
-    # ========================================================
-    # DEMITIDO
-    # ========================================================
+        colaborador = buscar_por_id_cracha(
+            valor
+        )
+
+        if colaborador:
+            return {
+                "tipo": "COLABORADOR",
+                "identificacao": "ID CRACHÁ",
+                "dados": colaborador,
+            }
 
     demitido = buscar_demitido(
-        identificacao
+        valor
     )
 
     if demitido:
-
         return {
             "tipo": "DEMITIDO",
-            "dados": demitido,
             "identificacao": "CHAPA",
+            "dados": demitido,
         }
-
-    # ========================================================
-    # NÃO ENCONTRADO
-    # ========================================================
 
     return {
         "tipo": "NAO_ENCONTRADO",
-        "resultado": "NÃO ENCONTRADO",
-        "identificacao": identificacao,
+        "resultado": "ID do crachá ou matrícula não encontrado.",
     }
+
+
+def identificar(identificacao):
+    if identificacao is None:
+        return {
+            "tipo": "NAO_ENCONTRADO",
+            "resultado": "Identificação vazia.",
+        }
+
+    valor = str(
+        identificacao
+    ).strip()
+
+    if not valor:
+        return {
+            "tipo": "NAO_ENCONTRADO",
+            "resultado": "Identificação vazia.",
+        }
+
+    try:
+        resultado = _identificar_rpc(
+            valor
+        )
+
+        if resultado:
+            return resultado
+
+    except Exception:
+        pass
+
+    return _identificar_fallback(
+        valor
+    )
