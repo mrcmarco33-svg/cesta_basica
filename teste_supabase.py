@@ -1,111 +1,71 @@
 import streamlit as st
-import psycopg2
+from supabase import create_client
 
 
-print("=" * 60)
-print("TESTE DE CONEXÃO COM SUPABASE")
-print("=" * 60)
+st.set_page_config(
+    page_title="Teste Supabase",
+    page_icon="🧪",
+    layout="centered",
+)
+
+
+st.title("🧪 Teste de conexão com Supabase")
 
 try:
-    # --------------------------------------------------------
-    # LÊ A STRING DO .streamlit/secrets.toml
-    # --------------------------------------------------------
+    supabase_url = st.secrets["SUPABASE_URL"]
+    supabase_key = st.secrets["SUPABASE_KEY"]
 
-    database_url = st.secrets["DATABASE_URL"]
-
-    print("DATABASE_URL encontrada.")
-    print("Tentando conectar ao Supabase...")
-
-    # --------------------------------------------------------
-    # CONEXÃO
-    # --------------------------------------------------------
-
-    conexao = psycopg2.connect(
-        database_url,
-        sslmode="require",
-        connect_timeout=10
+    supabase = create_client(
+        supabase_url,
+        supabase_key,
     )
 
-    cursor = conexao.cursor()
+    st.success("✅ Cliente Supabase criado com sucesso.")
 
-    # --------------------------------------------------------
-    # TESTA O BANCO
-    # --------------------------------------------------------
+    st.info(
+        "Isso confirma que o app conseguiu ler os Secrets "
+        "e inicializar a conexão com o Supabase."
+    )
 
-    cursor.execute("""
-        SELECT
-            current_database(),
-            current_user,
-            version()
-    """)
+    st.divider()
 
-    resultado = cursor.fetchone()
+    st.subheader("🔎 Teste opcional de tabela")
 
-    print()
-    print("✅ CONEXÃO REALIZADA COM SUCESSO!")
-    print()
-    print("Banco:", resultado[0])
-    print("Usuário:", resultado[1])
-    print("PostgreSQL:", resultado[2][:100])
-    print()
+    tabela = st.text_input(
+        "Nome da tabela para testar",
+        value="colaboradores",
+    )
 
-    # --------------------------------------------------------
-    # TESTA UMA TABELA SIMPLES
-    # --------------------------------------------------------
+    if st.button("Testar leitura da tabela"):
+        try:
+            resposta = (
+                supabase
+                .table(tabela)
+                .select("*")
+                .limit(5)
+                .execute()
+            )
 
-    cursor.execute("""
-        SELECT 1
-    """)
+            st.success(f"✅ Consegui consultar a tabela: {tabela}")
+            st.write(resposta.data)
 
-    teste = cursor.fetchone()
+        except Exception as erro_tabela:
+            st.warning(
+                "A conexão com o Supabase foi criada, "
+                "mas não consegui consultar essa tabela."
+            )
+            st.error(str(erro_tabela))
 
-    if teste[0] == 1:
-        print("✅ Consulta de teste executada com sucesso.")
-
-    cursor.close()
-    conexao.close()
-
-    print()
-    print("=" * 60)
-    print("SUPABASE ESTÁ FUNCIONANDO")
-    print("=" * 60)
-
-except KeyError:
-    print()
-    print("❌ ERRO: DATABASE_URL não encontrada.")
-    print()
-    print("Verifique se existe:")
-    print()
-    print(".streamlit\\secrets.toml")
-    print()
-    print("E se contém:")
-    print()
-    print('DATABASE_URL = "sua_string_do_supabase"')
-
-except psycopg2.OperationalError as erro:
-
-    print()
-    print("❌ ERRO DE CONEXÃO COM O SUPABASE")
-    print()
-    print(erro)
-    print()
-    print("Verifique:")
-    print("1. A senha do banco.")
-    print("2. A Session Pooler.")
-    print("3. O host.")
-    print("4. A porta 5432.")
-    print("5. O usuário.")
-    print()
+except KeyError as erro_secret:
+    st.error("❌ Secrets do Supabase não configurados corretamente.")
+    st.code(
+        """
+SUPABASE_URL = "https://SEU-PROJETO.supabase.co"
+SUPABASE_KEY = "SUA_CHAVE_AQUI"
+        """
+    )
+    st.error(f"Secret ausente: {erro_secret}")
 
 except Exception as erro:
-
-    print()
-    print("❌ ERRO INESPERADO")
-    print()
-    print(type(erro).__name__)
-    print(erro)
-
-finally:
-
-    print()
-    print("Teste encerrado.")
+    st.error("❌ Erro ao conectar com o Supabase.")
+    st.error(str(erro))
