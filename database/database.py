@@ -250,6 +250,30 @@ def _buscar_colaborador_por_id(colaborador_id):
 def liberar_cesta(colaborador_id, tipo_identificacao):
     cliente = conectar()
 
+    if entrega_esta_finalizada():
+        colaborador = _buscar_colaborador_por_id(
+            colaborador_id
+        )
+
+        if colaborador:
+            registrar_historico(
+                tipo_identificacao=tipo_identificacao,
+                id_cracha=colaborador.get("id_mat"),
+                matricula=colaborador.get("matricula"),
+                nome=colaborador.get("nome"),
+                setor=colaborador.get("setor"),
+                cesta_normal=0,
+                cesta_especial=0,
+                resultado="NEGADO",
+                motivo="Entrega finalizada. Não é possível realizar nova retirada.",
+            )
+
+        return {
+            "sucesso": False,
+            "resultado": "NEGADO",
+            "motivo": "Entrega finalizada. Não é possível realizar nova retirada.",
+        }
+
     try:
         resposta = (
             cliente
@@ -345,4 +369,252 @@ def obter_indicadores():
         "cestas_normais": cestas_normais,
         "cestas_especiais": cestas_especiais,
         "tentativas": len(registros),
+    }
+# ============================================================
+# CONTROLE DE ENTREGA
+# ============================================================
+
+def obter_status_entrega():
+    cliente = conectar()
+
+    resposta = (
+        cliente
+        .table("controle_entrega")
+        .select("*")
+        .eq("id", 1)
+        .limit(1)
+        .execute()
+    )
+
+    if resposta.data:
+        return resposta.data[0]
+
+    payload = {
+        "id": 1,
+        "status": "ABERTA",
+        "data_inicio": agora(),
+        "data_finalizacao": None,
+        "usuario_finalizacao": None,
+        "observacao": None,
+    }
+
+    (
+        cliente
+        .table("controle_entrega")
+        .insert(payload)
+        .execute()
+    )
+
+    return payload
+
+
+def entrega_esta_finalizada():
+    status = obter_status_entrega()
+
+    return str(
+        status.get("status", "")
+    ).upper() == "FINALIZADA"
+
+
+def finalizar_entrega(usuario=None, observacao=None):
+    cliente = conectar()
+
+    payload = {
+        "status": "FINALIZADA",
+        "data_finalizacao": agora(),
+        "usuario_finalizacao": usuario,
+        "observacao": observacao,
+        "updated_at": datetime.now().isoformat(),
+    }
+
+    (
+        cliente
+        .table("controle_entrega")
+        .update(payload)
+        .eq("id", 1)
+        .execute()
+    )
+
+    return {
+        "sucesso": True,
+        "mensagem": "Entrega finalizada com sucesso.",
+    }
+
+
+def reabrir_entrega(usuario=None):
+    cliente = conectar()
+
+    payload = {
+        "status": "ABERTA",
+        "data_finalizacao": None,
+        "usuario_finalizacao": usuario,
+        "observacao": None,
+        "updated_at": datetime.now().isoformat(),
+    }
+
+    (
+        cliente
+        .table("controle_entrega")
+        .update(payload)
+        .eq("id", 1)
+        .execute()
+    )
+
+    return {
+        "sucesso": True,
+        "mensagem": "Entrega reaberta com sucesso.",
+    }
+
+
+# ============================================================
+# CONSULTA DE RETIRADAS
+# ============================================================
+
+def _colaborador_autorizado(colaborador):
+    cesta_normal = _inteiro(
+        colaborador.get("cesta_normal")
+    )
+
+    cesta_especial = _inteiro(
+        colaborador.get("cesta_especial")
+    )
+
+    perdeu = _eh_sim(
+        colaborador.get("perde")
+    )
+
+    return (
+        cesta_normal > 0
+        or cesta_especial > 0
+    ) and not perdeu
+
+
+def _colaborador_retirou(colaborador):
+    return _eh_sim(
+        colaborador.get("confirmacao_retirada")
+    )
+
+
+def obter_consulta_retiradas(situacao="PENDENTES", busca=None):
+    cliente = conectar()
+
+    resposta = (
+        cliente
+        .table("colaboradores")
+        .select(
+            "id,id_mat,matricula,matricula_num,nome,setor,"
+            "cesta_normal,cesta_especial,perde,"
+            "confirmacao_retirada,data_hora_retirada"
+        )
+        .order(
+            "nome",
+            desc=False,
+        )
+        .limit(20000)
+        .execute()
+    )
+
+    registros = resposta.data or []
+
+    busca_texto = str(
+        busca or ""
+    ).strip().lower()
+
+    resultado = []
+
+    for colaborador in registros:
+        autorizado = _colaborador_autorizado(
+            colaborador
+        )
+
+        retirou = _colaborador_retirou(
+            colaborador
+        )
+
+        if autorizado and retirou:
+            status = "RETIRADO"
+        elif autorizado and not retirou:
+            status = "PENDENTE"
+        else:
+            status = "NÃO AUTORIZADO"
+
+        incluir = False
+
+        if situacao == "TODOS":
+            incluir = True
+
+        elif situacao == "PENDENTES" and status == "PENDENTE":
+            incluir = True
+
+        elif situacao == "RETIRADOS" and status == "RETIRADO":
+            incluir = True
+
+        elif situacao == "NAO_AUTORIZADOS" and status == "NÃO AUTORIZADO":
+            incluir = True
+
+        if not incluir:
+            continue
+
+        if busca_texto:
+            texto_linha = " ".join(
+                [
+                    str(colaborador.get("matricula") or ""),
+                    str(colaborador.get("id_mat") or ""),
+                    str(colaborador.get("nome") or ""),
+                    str(colaborador.get("setor") or ""),
+                ]
+            ).lower()
+
+            if busca_texto not in texto_linha:
+                continue
+
+        item = dict(
+            colaborador
+        )
+
+        item["situacao"] = status
+
+        resultado.append(
+            item
+        )
+
+    return resultado
+
+
+def obter_resumo_consulta():
+    todos = obter_consulta_retiradas(
+        situacao="TODOS"
+    )
+
+    total = len(
+        todos
+    )
+
+    autorizados = 0
+    pendentes = 0
+    retirados = 0
+    nao_autorizados = 0
+
+    for colaborador in todos:
+        situacao = colaborador.get(
+            "situacao"
+        )
+
+        if situacao == "PENDENTE":
+            pendentes += 1
+            autorizados += 1
+
+        elif situacao == "RETIRADO":
+            retirados += 1
+            autorizados += 1
+
+        else:
+            nao_autorizados += 1
+
+    return {
+        "total": total,
+        "autorizados": autorizados,
+        "pendentes": pendentes,
+        "retirados": retirados,
+        "nao_autorizados": nao_autorizados,
     }

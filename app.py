@@ -1,4 +1,5 @@
 import time
+from io import BytesIO
 
 import pandas as pd
 import streamlit as st
@@ -11,6 +12,11 @@ from database.database import (
     registrar_tentativa_nao_encontrada,
     obter_historico,
     obter_indicadores,
+    obter_status_entrega,
+    finalizar_entrega,
+    reabrir_entrega,
+    obter_consulta_retiradas,
+    obter_resumo_consulta,
 )
 
 from services.importador import importar_excel
@@ -418,19 +424,22 @@ with st.sidebar:
 
     if eh_admin:
         paginas = [
-            "Terminal",
-            "Dashboard",
-            "Histórico",
-            "Estoque",
-            "Importação",
-            "Usuários",
-            "Relatórios",
-        ]
+    "Terminal",
+    "Dashboard",
+    "Consulta",
+    "Histórico",
+    "Estoque",
+    "Importação",
+    "Usuários",
+    "Relatórios",
+]
+        
     else:
-        paginas = [
-            "Terminal",
-            "Dashboard",
-        ]
+        paginas = paginas = [
+    "Terminal",
+    "Dashboard",
+    "Consulta",
+]
 
     if st.session_state.pagina not in paginas:
         st.session_state.pagina = "Terminal"
@@ -490,7 +499,21 @@ with st.sidebar:
 def tela_terminal():
     st.title("🥫 ENTREGA DE CESTAS BÁSICAS")
     st.caption("Terminal automático de distribuição")
+    status_entrega = obter_status_entrega()
 
+    if str(status_entrega.get("status", "")).upper() == "FINALIZADA":
+        st.error("🔴 Entrega finalizada")
+        st.warning(
+            "O terminal está bloqueado para novas retiradas. "
+            "Acesse a tela Consulta para verificar pendências."
+        )
+
+        if status_entrega.get("data_finalizacao"):
+            st.info(
+                f"Finalizada em: {status_entrega.get('data_finalizacao')}"
+            )
+
+        return
     estoque = obter_estoque()
 
     normal = estoque["cesta_normal"] if estoque else 0
@@ -693,6 +716,212 @@ def tela_dashboard():
         with col2:
             st.metric("Cestas especiais", estoque["cesta_especial"])
 
+# ============================================================
+# CONSULTA DE RETIRADAS
+# ============================================================
+
+def tela_consulta():
+    st.title("🔎 Consulta de retiradas")
+
+    status_entrega = obter_status_entrega()
+    resumo = obter_resumo_consulta()
+
+    status_atual = str(
+        status_entrega.get("status", "ABERTA")
+    ).upper()
+
+    if status_atual == "FINALIZADA":
+        st.error("🔴 Entrega finalizada")
+
+        st.caption(
+            f"Finalizada em: {status_entrega.get('data_finalizacao') or '-'}"
+        )
+
+        if status_entrega.get("usuario_finalizacao"):
+            st.caption(
+                f"Finalizada por: {status_entrega.get('usuario_finalizacao')}"
+            )
+
+        if status_entrega.get("observacao"):
+            st.info(
+                status_entrega.get("observacao")
+            )
+    else:
+        st.success("🟢 Entrega aberta")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric(
+            "👥 Autorizados",
+            resumo["autorizados"],
+        )
+
+    with col2:
+        st.metric(
+            "⏳ Faltam retirar",
+            resumo["pendentes"],
+        )
+
+    with col3:
+        st.metric(
+            "✅ Já retiraram",
+            resumo["retirados"],
+        )
+
+    with col4:
+        st.metric(
+            "🚫 Não autorizados",
+            resumo["nao_autorizados"],
+        )
+
+    st.divider()
+
+    col1, col2 = st.columns([2, 3])
+
+    with col1:
+        opcao = st.selectbox(
+            "Situação",
+            [
+                "Faltam retirar",
+                "Já retiraram",
+                "Não autorizados",
+                "Todos",
+            ],
+            key="consulta_situacao",
+        )
+
+    with col2:
+        busca = st.text_input(
+            "Buscar",
+            placeholder="Nome, matrícula, crachá ou setor...",
+            key="consulta_busca",
+        )
+
+    mapa_situacao = {
+        "Faltam retirar": "PENDENTES",
+        "Já retiraram": "RETIRADOS",
+        "Não autorizados": "NAO_AUTORIZADOS",
+        "Todos": "TODOS",
+    }
+
+    registros = obter_consulta_retiradas(
+        situacao=mapa_situacao[opcao],
+        busca=busca,
+    )
+
+    dados = []
+
+    for registro in registros:
+        dados.append(
+            {
+                "Situação": registro.get("situacao"),
+                "Matrícula": registro.get("matricula"),
+                "Crachá": registro.get("id_mat"),
+                "Nome": registro.get("nome"),
+                "Setor": registro.get("setor"),
+                "Cesta Normal": registro.get("cesta_normal"),
+                "Cesta Especial": registro.get("cesta_especial"),
+                "Retirou": registro.get("confirmacao_retirada"),
+                "Data/Hora Retirada": registro.get("data_hora_retirada"),
+                "Perde": registro.get("perde"),
+            }
+        )
+
+    df = pd.DataFrame(
+        dados
+    )
+
+    st.caption(
+        f"{len(df)} registro(s) encontrado(s)."
+    )
+
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    arquivo_excel = gerar_excel_relatorio(
+        df
+    )
+
+    st.download_button(
+        "⬇️ Exportar consulta em Excel",
+        data=arquivo_excel,
+        file_name="consulta_retiradas.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key="download_consulta_retiradas_excel",
+    )
+
+    csv = df.to_csv(
+        index=False,
+        sep=";",
+        encoding="utf-8-sig",
+    )
+
+    st.download_button(
+        "⬇️ Exportar consulta em CSV",
+        data=csv,
+        file_name="consulta_retiradas.csv",
+        mime="text/csv",
+        use_container_width=True,
+        key="download_consulta_retiradas_csv",
+    )
+
+    if eh_admin:
+        st.divider()
+        st.subheader("🔒 Controle da entrega")
+
+        if status_atual != "FINALIZADA":
+            st.warning(
+                "Ao finalizar a entrega, o terminal ficará bloqueado "
+                "para novas retiradas."
+            )
+
+            observacao = st.text_area(
+                "Observação da finalização",
+                placeholder="Exemplo: entrega encerrada no final do turno.",
+                key="observacao_finalizacao",
+            )
+
+            confirmar = st.checkbox(
+                "Confirmo que desejo finalizar a entrega.",
+                key="confirmar_finalizacao_entrega",
+            )
+
+            if st.button(
+                "🔴 Finalizar entrega",
+                type="primary",
+                use_container_width=True,
+                disabled=not confirmar,
+                key="botao_finalizar_entrega",
+            ):
+                finalizar_entrega(
+                    usuario=st.session_state.usuario,
+                    observacao=observacao,
+                )
+
+                st.success("Entrega finalizada.")
+                st.rerun()
+
+        else:
+            st.warning(
+                "A entrega está finalizada. Reabrir permitirá novas retiradas."
+            )
+
+            if st.button(
+                "🟢 Reabrir entrega",
+                use_container_width=True,
+                key="botao_reabrir_entrega",
+            ):
+                reabrir_entrega(
+                    usuario=st.session_state.usuario,
+                )
+
+                st.success("Entrega reaberta.")
+                st.rerun()
 
 # ============================================================
 # HISTÓRICO
@@ -1045,6 +1274,47 @@ def tela_usuarios():
 # RELATÓRIOS
 # ============================================================
 
+# ============================================================
+# RELATÓRIOS
+# ============================================================
+
+def gerar_excel_relatorio(df):
+    arquivo = BytesIO()
+
+    with pd.ExcelWriter(
+        arquivo,
+        engine="openpyxl",
+    ) as writer:
+        df.to_excel(
+            writer,
+            index=False,
+            sheet_name="Retiradas",
+        )
+
+        planilha = writer.sheets["Retiradas"]
+
+        for coluna in planilha.columns:
+            maior_tamanho = 0
+            letra_coluna = coluna[0].column_letter
+
+            for celula in coluna:
+                valor = celula.value
+
+                if valor is None:
+                    tamanho = 0
+                else:
+                    tamanho = len(str(valor))
+
+                if tamanho > maior_tamanho:
+                    maior_tamanho = tamanho
+
+            planilha.column_dimensions[letra_coluna].width = maior_tamanho + 3
+
+    arquivo.seek(0)
+
+    return arquivo
+
+
 def tela_relatorios():
     st.title("📑 Relatórios")
 
@@ -1092,18 +1362,32 @@ def tela_relatorios():
         hide_index=True,
     )
 
+    arquivo_excel = gerar_excel_relatorio(
+        retiradas
+    )
+
+    st.download_button(
+        "⬇️ Exportar relatório em Excel",
+        data=arquivo_excel,
+        file_name="relatorio_retiradas.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key="download_relatorio_retiradas_excel",
+    )
+
     csv = retiradas.to_csv(
         index=False,
+        sep=";",
         encoding="utf-8-sig",
     )
 
     st.download_button(
-        "⬇️ Exportar retiradas",
+        "⬇️ Exportar relatório em CSV",
         data=csv,
         file_name="relatorio_retiradas.csv",
         mime="text/csv",
         use_container_width=True,
-        key="download_relatorio_retiradas",
+        key="download_relatorio_retiradas_csv",
     )
 
 
@@ -1118,6 +1402,9 @@ if pagina == "Terminal":
 
 elif pagina == "Dashboard":
     tela_dashboard()
+
+elif pagina == "Consulta":
+    tela_consulta()
 
 elif pagina == "Histórico" and eh_admin:
     tela_historico()
