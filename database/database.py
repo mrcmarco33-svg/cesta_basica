@@ -1,6 +1,17 @@
+import sqlite3
+from pathlib import Path
 from datetime import datetime
 
-from services.supabase_client import obter_supabase
+
+# ============================================================
+# CAMINHOS
+# ============================================================
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+DATA_DIR = BASE_DIR / "data"
+
+DB_PATH = DATA_DIR / "cestas.db"
 
 
 # ============================================================
@@ -8,215 +19,28 @@ from services.supabase_client import obter_supabase
 # ============================================================
 
 def conectar():
-    return obter_supabase()
+
+    DATA_DIR.mkdir(
+        exist_ok=True
+    )
+
+    conexao = sqlite3.connect(
+        DB_PATH
+    )
+
+    conexao.row_factory = sqlite3.Row
+
+    return conexao
 
 
 # ============================================================
-# UTILITÁRIOS
+# DATA / HORA
 # ============================================================
 
 def agora():
-    return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
-
-def _inteiro(valor, padrao=0):
-    if valor is None:
-        return padrao
-
-    try:
-        if str(valor).strip() == "":
-            return padrao
-
-        return int(float(str(valor).replace(",", ".")))
-    except Exception:
-        return padrao
-
-
-def _texto(valor):
-    if valor is None:
-        return ""
-
-    return str(valor).strip()
-
-
-def _eh_sim(valor):
-    texto = _texto(valor).upper()
-
-    return texto in [
-        "SIM",
-        "S",
-        "YES",
-        "TRUE",
-        "1",
-    ]
-
-
-# ============================================================
-# PERÍODOS
-# ============================================================
-
-def obter_periodo_ativo():
-    cliente = conectar()
-
-    resposta = (
-        cliente
-        .table("periodos_entrega")
-        .select("*")
-        .eq("ativo", True)
-        .order("id", desc=True)
-        .limit(1)
-        .execute()
-    )
-
-    if resposta.data:
-        return resposta.data[0]
-
-    payload = {
-        "nome": "Período inicial",
-        "status": "ABERTA",
-        "ativo": True,
-        "data_inicio": agora(),
-        "usuario_criacao": "sistema",
-        "observacao": "Período criado automaticamente.",
-    }
-
-    resposta = (
-        cliente
-        .table("periodos_entrega")
-        .insert(payload)
-        .execute()
-    )
-
-    return resposta.data[0]
-
-
-def obter_periodo_ativo_id():
-    periodo = obter_periodo_ativo()
-
-    return periodo["id"]
-
-
-def listar_periodos():
-    cliente = conectar()
-
-    resposta = (
-        cliente
-        .table("periodos_entrega")
-        .select("*")
-        .order("id", desc=True)
-        .execute()
-    )
-
-    return resposta.data or []
-
-
-def criar_novo_periodo(nome, usuario=None, observacao=None, zerar_estoque=True):
-    cliente = conectar()
-
-    data_hora = agora()
-
-    if not nome or not str(nome).strip():
-        nome = f"Período {data_hora}"
-
-    periodos_ativos = (
-        cliente
-        .table("periodos_entrega")
-        .select("*")
-        .eq("ativo", True)
-        .execute()
-    )
-
-    for periodo in periodos_ativos.data or []:
-        cliente.table("periodos_entrega").update(
-            {
-                "ativo": False,
-                "status": "FINALIZADA",
-                "data_finalizacao": periodo.get("data_finalizacao") or data_hora,
-                "usuario_finalizacao": periodo.get("usuario_finalizacao") or usuario,
-                "updated_at": datetime.now().isoformat(),
-            }
-        ).eq("id", periodo["id"]).execute()
-
-    resposta = (
-        cliente
-        .table("periodos_entrega")
-        .insert(
-            {
-                "nome": str(nome).strip(),
-                "status": "ABERTA",
-                "ativo": True,
-                "data_inicio": data_hora,
-                "usuario_criacao": usuario,
-                "observacao": observacao,
-                "updated_at": datetime.now().isoformat(),
-            }
-        )
-        .execute()
-    )
-
-    novo_periodo = resposta.data[0]
-    novo_periodo_id = novo_periodo["id"]
-
-    cliente.table("controle_entrega").upsert(
-        {
-            "id": 1,
-            "periodo_id": novo_periodo_id,
-            "status": "ABERTA",
-            "data_inicio": data_hora,
-            "data_finalizacao": None,
-            "usuario_finalizacao": None,
-            "observacao": observacao,
-            "updated_at": datetime.now().isoformat(),
-        },
-        on_conflict="id",
-    ).execute()
-
-    if zerar_estoque:
-        cliente.table("estoque").upsert(
-            {
-                "id": 1,
-                "periodo_id": novo_periodo_id,
-                "cesta_normal": 0,
-                "cesta_especial": 0,
-                "atualizado_em": data_hora,
-            },
-            on_conflict="id",
-        ).execute()
-    else:
-        estoque = obter_estoque()
-
-        cliente.table("estoque").upsert(
-            {
-                "id": 1,
-                "periodo_id": novo_periodo_id,
-                "cesta_normal": _inteiro(estoque.get("cesta_normal")),
-                "cesta_especial": _inteiro(estoque.get("cesta_especial")),
-                "atualizado_em": data_hora,
-            },
-            on_conflict="id",
-        ).execute()
-
-    registrar_historico(
-        periodo_id=novo_periodo_id,
-        tipo_identificacao="SISTEMA",
-        resultado="NOVO_PERIODO",
-        motivo=f"Novo período criado: {nome}. Usuário: {usuario or '-'}",
-        data_hora=data_hora,
-    )
-
-    return {
-        "sucesso": True,
-        "periodo": novo_periodo,
-        "mensagem": "Novo período criado com sucesso.",
-    }
-
-
-def iniciar_nova_entrega(usuario=None, observacao=None, zerar_estoque=True, nome=None):
-    return criar_novo_periodo(
-        nome=nome or f"Nova entrega {agora()}",
-        usuario=usuario,
-        observacao=observacao,
-        zerar_estoque=zerar_estoque,
+    return datetime.now().strftime(
+        "%d/%m/%Y %H:%M:%S"
     )
 
 
@@ -225,408 +49,804 @@ def iniciar_nova_entrega(usuario=None, observacao=None, zerar_estoque=True, nome
 # ============================================================
 
 def inicializar_banco():
-    cliente = conectar()
 
-    periodo_id = obter_periodo_ativo_id()
+    conexao = conectar()
 
-    resposta = (
-        cliente
-        .table("estoque")
-        .select("*")
-        .eq("id", 1)
-        .limit(1)
-        .execute()
-    )
+    cursor = conexao.cursor()
 
-    if not resposta.data:
-        cliente.table("estoque").insert(
-            {
-                "id": 1,
-                "periodo_id": periodo_id,
-                "cesta_normal": 0,
-                "cesta_especial": 0,
-                "atualizado_em": None,
-            }
-        ).execute()
+    # ========================================================
+    # COLABORADORES
+    # ========================================================
 
-    resposta_controle = (
-        cliente
-        .table("controle_entrega")
-        .select("*")
-        .eq("id", 1)
-        .limit(1)
-        .execute()
-    )
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS colaboradores (
 
-    if not resposta_controle.data:
-        cliente.table("controle_entrega").insert(
-            {
-                "id": 1,
-                "periodo_id": periodo_id,
-                "status": "ABERTA",
-                "data_inicio": agora(),
-            }
-        ).execute()
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            id_mat INTEGER UNIQUE,
+
+            matricula TEXT UNIQUE NOT NULL,
+
+            nome TEXT NOT NULL,
+
+            setor TEXT,
+
+            cesta_normal INTEGER DEFAULT 0,
+
+            cesta_especial INTEGER DEFAULT 0,
+
+            perde TEXT,
+
+            confirmacao_retirada TEXT,
+
+            data_hora_retirada TEXT
+
+        )
+    """)
+
+    # ========================================================
+    # DEMITIDOS
+    # ========================================================
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS demitidos (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            chapa TEXT UNIQUE NOT NULL,
+
+            nome TEXT NOT NULL,
+
+            retirado TEXT,
+
+            data_hora TEXT
+
+        )
+    """)
+
+    # ========================================================
+    # ESTOQUE
+    # ========================================================
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS estoque (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            cesta_normal INTEGER DEFAULT 0,
+
+            cesta_especial INTEGER DEFAULT 0,
+
+            data_atualizacao TEXT
+
+        )
+    """)
+
+    # ========================================================
+    # HISTÓRICO
+    # ========================================================
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS historico (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            data_hora TEXT NOT NULL,
+
+            tipo_identificacao TEXT,
+
+            id_cracha INTEGER,
+
+            matricula TEXT,
+
+            nome TEXT,
+
+            setor TEXT,
+
+            cesta_normal INTEGER DEFAULT 0,
+
+            cesta_especial INTEGER DEFAULT 0,
+
+            resultado TEXT,
+
+            motivo TEXT,
+
+            estoque_normal_antes INTEGER,
+
+            estoque_normal_depois INTEGER,
+
+            estoque_especial_antes INTEGER,
+
+            estoque_especial_depois INTEGER
+
+        )
+    """)
+
+    # ========================================================
+    # PERÍODOS
+    # ========================================================
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS periodos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            data_inicio TEXT,
+            data_fim TEXT,
+            status TEXT NOT NULL DEFAULT 'ABERTO',
+            data_criacao TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS colaboradores_periodos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            periodo_id INTEGER NOT NULL,
+            id_original INTEGER,
+            id_mat INTEGER,
+            matricula TEXT NOT NULL,
+            nome TEXT NOT NULL,
+            setor TEXT,
+            cesta_normal INTEGER DEFAULT 0,
+            cesta_especial INTEGER DEFAULT 0,
+            perde TEXT,
+            confirmacao_retirada TEXT,
+            data_hora_retirada TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS demitidos_periodos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            periodo_id INTEGER NOT NULL,
+            id_original INTEGER,
+            chapa TEXT NOT NULL,
+            nome TEXT NOT NULL,
+            retirado TEXT,
+            data_hora TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS estoque_periodos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            periodo_id INTEGER NOT NULL UNIQUE,
+            cesta_normal INTEGER DEFAULT 0,
+            cesta_especial INTEGER DEFAULT 0,
+            data_atualizacao TEXT
+        )
+    """)
+
+    def adicionar_coluna_se_nao_existir(tabela, coluna, definicao):
+        colunas = [row[1] for row in cursor.execute(f"PRAGMA table_info({tabela})").fetchall()]
+        if coluna not in colunas:
+            cursor.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao}")
+
+    adicionar_coluna_se_nao_existir("colaboradores", "periodo_id", "INTEGER")
+    adicionar_coluna_se_nao_existir("demitidos", "periodo_id", "INTEGER")
+    adicionar_coluna_se_nao_existir("estoque", "periodo_id", "INTEGER")
+    adicionar_coluna_se_nao_existir("historico", "periodo_id", "INTEGER")
+
+    cursor.execute("""
+        CREATE TRIGGER IF NOT EXISTS historico_periodo_automatico
+        AFTER INSERT ON historico
+        WHEN NEW.periodo_id IS NULL
+        BEGIN
+            UPDATE historico
+            SET periodo_id = (SELECT id FROM periodos WHERE status='ABERTO' ORDER BY id DESC LIMIT 1)
+            WHERE id = NEW.id;
+        END;
+    """)
+
+    # ========================================================
+    # ESTOQUE INICIAL
+    # ========================================================
+
+    estoque = cursor.execute("""
+        SELECT id
+        FROM estoque
+        LIMIT 1
+    """).fetchone()
+
+    if estoque is None:
+
+        cursor.execute("""
+            INSERT INTO estoque (
+                cesta_normal,
+                cesta_especial,
+                data_atualizacao
+            )
+            VALUES (?, ?, ?)
+        """, (
+            0,
+            0,
+            agora()
+        ))
+
+    # --------------------------------------------------------
+    # MIGRAÇÃO INICIAL: cria um período para os dados antigos.
+    # --------------------------------------------------------
+    periodo = cursor.execute("SELECT * FROM periodos ORDER BY id LIMIT 1").fetchone()
+    if periodo is None:
+        cursor.execute("""
+            INSERT INTO periodos (nome, data_inicio, status, data_criacao)
+            VALUES (?, ?, 'ABERTO', ?)
+        """, ("Período legado / atual", datetime.now().strftime("%d/%m/%Y"), agora()))
+        periodo_id = cursor.lastrowid
+    else:
+        periodo_id = periodo["id"]
+
+    cursor.execute("UPDATE colaboradores SET periodo_id = ? WHERE periodo_id IS NULL", (periodo_id,))
+    cursor.execute("UPDATE demitidos SET periodo_id = ? WHERE periodo_id IS NULL", (periodo_id,))
+    cursor.execute("UPDATE historico SET periodo_id = ? WHERE periodo_id IS NULL", (periodo_id,))
+    cursor.execute("UPDATE estoque SET periodo_id = ? WHERE periodo_id IS NULL", (periodo_id,))
+
+    estoque_atual = cursor.execute("SELECT * FROM estoque ORDER BY id LIMIT 1").fetchone()
+    if estoque_atual is not None:
+        cursor.execute("""
+            INSERT OR IGNORE INTO estoque_periodos
+            (periodo_id, cesta_normal, cesta_especial, data_atualizacao)
+            VALUES (?, ?, ?, ?)
+        """, (periodo_id, estoque_atual["cesta_normal"], estoque_atual["cesta_especial"], estoque_atual["data_atualizacao"]))
+
+    conexao.commit()
+
+    conexao.close()
 
 
 # ============================================================
-# ESTOQUE
+# PERÍODOS
 # ============================================================
+
+def obter_periodos():
+    conexao = conectar()
+    try:
+        return conexao.execute("SELECT * FROM periodos ORDER BY id DESC").fetchall()
+    finally:
+        conexao.close()
+
+
+def obter_periodo_atual():
+    conexao = conectar()
+    try:
+        return conexao.execute("SELECT * FROM periodos WHERE status = 'ABERTO' ORDER BY id DESC LIMIT 1").fetchone()
+    finally:
+        conexao.close()
+
+
+def obter_periodo_ativo_id():
+    """Compatibilidade com versões do importador que esperam apenas o ID do período ativo."""
+    periodo = obter_periodo_atual()
+    if periodo is None:
+        return None
+    return int(periodo["id"])
+
+
+def obter_periodo(periodo_id):
+    conexao = conectar()
+    try:
+        return conexao.execute("SELECT * FROM periodos WHERE id = ?", (int(periodo_id),)).fetchone()
+    finally:
+        conexao.close()
+
+
+def criar_periodo(nome, data_inicio=None, data_fim=None):
+    nome = str(nome or '').strip()
+    if not nome:
+        raise ValueError('Informe o nome do período.')
+
+    conexao = conectar()
+    try:
+        atual = conexao.execute("SELECT * FROM periodos WHERE status = 'ABERTO' ORDER BY id DESC LIMIT 1").fetchone()
+        if atual is not None:
+            raise ValueError(f'Já existe um período aberto: {atual["nome"]}. Encerre-o antes de criar outro.')
+
+        conexao.execute("""
+            INSERT INTO periodos (nome, data_inicio, data_fim, status, data_criacao)
+            VALUES (?, ?, ?, 'ABERTO', ?)
+        """, (nome, data_inicio, data_fim, agora()))
+        periodo_id = conexao.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        # Guarda um retrato do período anterior antes de limpar o cadastro ativo.
+        anterior = conexao.execute("SELECT * FROM periodos WHERE id < ? ORDER BY id DESC LIMIT 1", (periodo_id,)).fetchone()
+        if anterior is not None:
+            old_id = anterior['id']
+            qtd = conexao.execute("SELECT COUNT(*) FROM colaboradores_periodos WHERE periodo_id = ?", (old_id,)).fetchone()[0]
+            if qtd == 0:
+                rows = conexao.execute("SELECT * FROM colaboradores WHERE periodo_id = ? OR periodo_id IS NULL", (old_id,)).fetchall()
+                for r in rows:
+                    conexao.execute("""INSERT INTO colaboradores_periodos
+                        (periodo_id,id_original,id_mat,matricula,nome,setor,cesta_normal,cesta_especial,perde,confirmacao_retirada,data_hora_retirada)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (old_id,r['id'],r['id_mat'],r['matricula'],r['nome'],r['setor'],r['cesta_normal'],r['cesta_especial'],r['perde'],r['confirmacao_retirada'],r['data_hora_retirada']))
+                rowsd = conexao.execute("SELECT * FROM demitidos WHERE periodo_id = ? OR periodo_id IS NULL", (old_id,)).fetchall()
+                for r in rowsd:
+                    conexao.execute("""INSERT INTO demitidos_periodos
+                        (periodo_id,id_original,chapa,nome,retirado,data_hora) VALUES (?,?,?,?,?,?)""", (old_id,r['id'],r['chapa'],r['nome'],r['retirado'],r['data_hora']))
+                stock = conexao.execute("SELECT * FROM estoque WHERE id = (SELECT id FROM estoque ORDER BY id LIMIT 1)").fetchone()
+                if stock is not None:
+                    conexao.execute("""INSERT OR REPLACE INTO estoque_periodos
+                        (periodo_id,cesta_normal,cesta_especial,data_atualizacao) VALUES (?,?,?,?)""", (old_id,stock['cesta_normal'],stock['cesta_especial'],stock['data_atualizacao']))
+
+        conexao.execute("DELETE FROM colaboradores")
+        conexao.execute("DELETE FROM demitidos")
+        conexao.execute("""UPDATE estoque SET cesta_normal=0,cesta_especial=0,data_atualizacao=?,periodo_id=?
+                           WHERE id=(SELECT id FROM estoque ORDER BY id LIMIT 1)""", (agora(), periodo_id))
+        conexao.commit()
+        return periodo_id
+    except Exception:
+        conexao.rollback()
+        raise
+    finally:
+        conexao.close()
+
+
+def encerrar_periodo(periodo_id):
+    conexao = conectar()
+    try:
+        periodo = conexao.execute("SELECT * FROM periodos WHERE id = ?", (int(periodo_id),)).fetchone()
+        if periodo is None:
+            raise ValueError('Período não encontrado.')
+        if periodo['status'] == 'ENCERRADO':
+            return
+        conexao.execute("UPDATE periodos SET status='ENCERRADO', data_fim=COALESCE(data_fim, ?) WHERE id=?", (datetime.now().strftime('%d/%m/%Y'), int(periodo_id)))
+        conexao.commit()
+    finally:
+        conexao.close()
+
+
+def preparar_periodo_para_importacao(periodo_id):
+    conexao = conectar()
+    try:
+        p = conexao.execute("SELECT * FROM periodos WHERE id=?", (int(periodo_id),)).fetchone()
+        if p is None or p['status'] != 'ABERTO':
+            raise ValueError('O período selecionado não está aberto.')
+        atual = conexao.execute("SELECT periodo_id FROM colaboradores LIMIT 1").fetchone()
+        if atual is not None and atual['periodo_id'] != int(periodo_id):
+            raise ValueError('O período selecionado não é o período ativo.')
+    finally:
+        conexao.close()
+
 
 def obter_estoque():
-    cliente = conectar()
-    periodo_id = obter_periodo_ativo_id()
 
-    resposta = (
-        cliente
-        .table("estoque")
-        .select("*")
-        .eq("id", 1)
-        .limit(1)
-        .execute()
-    )
+    conexao = conectar()
 
-    if resposta.data:
-        estoque = resposta.data[0]
+    try:
 
-        if estoque.get("periodo_id") != periodo_id:
-            cliente.table("estoque").update(
-                {
-                    "periodo_id": periodo_id,
-                }
-            ).eq("id", 1).execute()
-
-            estoque["periodo_id"] = periodo_id
+        estoque = conexao.execute("""
+            SELECT *
+            FROM estoque
+            ORDER BY id
+            LIMIT 1
+        """).fetchone()
 
         return estoque
 
-    cliente.table("estoque").insert(
-        {
-            "id": 1,
-            "periodo_id": periodo_id,
-            "cesta_normal": 0,
-            "cesta_especial": 0,
-            "atualizado_em": None,
+    finally:
+
+        conexao.close()
+
+
+def configurar_estoque(
+    cesta_normal,
+    cesta_especial
+):
+
+    cesta_normal = int(
+        cesta_normal
+    )
+
+    cesta_especial = int(
+        cesta_especial
+    )
+
+    if cesta_normal < 0:
+
+        raise ValueError(
+            "A quantidade de cesta normal "
+            "não pode ser negativa."
+        )
+
+    if cesta_especial < 0:
+
+        raise ValueError(
+            "A quantidade de cesta especial "
+            "não pode ser negativa."
+        )
+
+    conexao = conectar()
+
+    try:
+
+        periodo = conexao.execute("SELECT id FROM periodos WHERE status='ABERTO' ORDER BY id DESC LIMIT 1").fetchone()
+        periodo_id = periodo["id"] if periodo else None
+        conexao.execute("""
+            UPDATE estoque
+            SET
+                cesta_normal = ?,
+                cesta_especial = ?,
+                data_atualizacao = ?,
+                periodo_id = ?
+            WHERE id = (
+                SELECT id
+                FROM estoque
+                ORDER BY id
+                LIMIT 1
+            )
+        """, (
+            cesta_normal,
+            cesta_especial,
+            agora(),
+            periodo_id
+        ))
+
+        conexao.commit()
+
+    finally:
+
+        conexao.close()
+
+
+# ============================================================
+# REGISTRAR HISTÓRICO
+# ============================================================
+
+def registrar_historico(
+    data_hora,
+    tipo_identificacao,
+    id_cracha,
+    matricula,
+    nome,
+    setor,
+    cesta_normal,
+    cesta_especial,
+    resultado,
+    motivo,
+    estoque_normal_antes=None,
+    estoque_normal_depois=None,
+    estoque_especial_antes=None,
+    estoque_especial_depois=None,
+    periodo_id=None,
+):
+    """Registra uma operação vinculada ao período aberto atual."""
+    conexao = conectar()
+
+    try:
+        if periodo_id is None:
+            periodo = conexao.execute(
+                "SELECT id FROM periodos WHERE status='ABERTO' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            periodo_id = periodo["id"] if periodo else None
+
+        conexao.execute("""
+            INSERT INTO historico (
+                data_hora, tipo_identificacao, id_cracha, matricula,
+                nome, setor, cesta_normal, cesta_especial, resultado, motivo,
+                estoque_normal_antes, estoque_normal_depois,
+                estoque_especial_antes, estoque_especial_depois, periodo_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            data_hora, tipo_identificacao, id_cracha, matricula, nome, setor,
+            cesta_normal, cesta_especial, resultado, motivo,
+            estoque_normal_antes, estoque_normal_depois,
+            estoque_especial_antes, estoque_especial_depois, periodo_id,
+        ))
+        conexao.commit()
+    finally:
+        conexao.close()
+
+
+# ============================================================
+# TENTATIVA NÃO ENCONTRADA
+# ============================================================
+
+def registrar_tentativa_nao_encontrada(
+    identificacao,
+    periodo_id=None,
+):
+    """Registra uma identificação não encontrada no período atual."""
+    conexao = conectar()
+
+    try:
+        if periodo_id is None:
+            periodo = conexao.execute(
+                "SELECT id FROM periodos WHERE status='ABERTO' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            periodo_id = periodo["id"] if periodo else None
+
+        conexao.execute("""
+            INSERT INTO historico (
+                data_hora, tipo_identificacao, id_cracha, matricula,
+                nome, setor, cesta_normal, cesta_especial, resultado, motivo, periodo_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            agora(),
+            "NÃO IDENTIFICADO",
+            None,
+            str(identificacao),
+            None,
+            None,
+            0,
+            0,
+            "NAO_ENCONTRADO",
+            "ID do crachá ou matrícula não encontrado.",
+            periodo_id,
+        ))
+        conexao.commit()
+    finally:
+        conexao.close()
+
+
+# ============================================================
+# LIBERAÇÃO DA CESTA
+# ============================================================
+
+def liberar_cesta(
+    colaborador_id,
+    tipo_identificacao
+):
+    """Libera a cesta com validação e desconto atômico do estoque."""
+    conexao = conectar()
+
+    try:
+        # IMMEDIATE evita duas liberações simultâneas consumirem o mesmo estoque.
+        conexao.execute("BEGIN IMMEDIATE")
+        cursor = conexao.cursor()
+
+        periodo = cursor.execute(
+            "SELECT id FROM periodos WHERE status='ABERTO' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if periodo is None:
+            conexao.rollback()
+            return {
+                "sucesso": False,
+                "resultado": "ERRO",
+                "motivo": "Não existe período aberto para realizar a entrega."
+            }
+        periodo_id = int(periodo["id"])
+
+        colaborador = cursor.execute("""
+            SELECT *
+            FROM colaboradores
+            WHERE id = ?
+            LIMIT 1
+        """, (colaborador_id,)).fetchone()
+
+        if colaborador is None:
+            conexao.rollback()
+            return {
+                "sucesso": False,
+                "resultado": "ERRO",
+                "motivo": "Colaborador não encontrado."
+            }
+
+        if colaborador["periodo_id"] is not None and int(colaborador["periodo_id"]) != periodo_id:
+            conexao.rollback()
+            return {
+                "sucesso": False,
+                "resultado": "ERRO",
+                "motivo": "O colaborador não pertence ao período ativo."
+            }
+
+        perde = str(colaborador["perde"] or "").strip()
+        if perde and perde.lower() not in {"nan", "none", "null", "nat"}:
+            motivo = perde
+            cursor.execute("""
+                INSERT INTO historico (
+                    data_hora, tipo_identificacao, id_cracha, matricula,
+                    nome, setor, cesta_normal, cesta_especial, resultado, motivo, periodo_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                agora(), tipo_identificacao, colaborador["id_mat"],
+                colaborador["matricula"], colaborador["nome"], colaborador["setor"],
+                colaborador["cesta_normal"], colaborador["cesta_especial"],
+                "NEGADO", motivo, periodo_id,
+            ))
+            conexao.commit()
+            return {
+                "sucesso": False,
+                "resultado": "NEGADO",
+                "motivo": motivo,
+                "perde": motivo,
+            }
+
+        if colaborador["confirmacao_retirada"]:
+            motivo = (
+                "Retirada já realizada em "
+                f"{colaborador['data_hora_retirada']}"
+            )
+            cursor.execute("""
+                INSERT INTO historico (
+                    data_hora, tipo_identificacao, id_cracha, matricula,
+                    nome, setor, cesta_normal, cesta_especial, resultado, motivo, periodo_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                agora(), tipo_identificacao, colaborador["id_mat"],
+                colaborador["matricula"], colaborador["nome"], colaborador["setor"],
+                colaborador["cesta_normal"], colaborador["cesta_especial"],
+                "DUPLICADO", "Retirada já realizada.", periodo_id,
+            ))
+            conexao.commit()
+            return {"sucesso": False, "resultado": "DUPLICADO", "motivo": motivo}
+
+        cesta_normal_necessaria = int(colaborador["cesta_normal"] or 0)
+        cesta_especial_necessaria = int(colaborador["cesta_especial"] or 0)
+
+        if cesta_normal_necessaria <= 0 and cesta_especial_necessaria <= 0:
+            motivo = "Colaborador não possui cesta normal ou especial."
+            cursor.execute("""
+                INSERT INTO historico (
+                    data_hora, tipo_identificacao, id_cracha, matricula,
+                    nome, setor, cesta_normal, cesta_especial, resultado, motivo, periodo_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                agora(), tipo_identificacao, colaborador["id_mat"],
+                colaborador["matricula"], colaborador["nome"], colaborador["setor"],
+                0, 0, "NEGADO", motivo, periodo_id,
+            ))
+            conexao.commit()
+            return {"sucesso": False, "resultado": "NEGADO", "motivo": motivo}
+
+        estoque = cursor.execute("""
+            SELECT * FROM estoque ORDER BY id LIMIT 1
+        """).fetchone()
+
+        if estoque is None:
+            cursor.execute("""
+                INSERT INTO estoque (cesta_normal, cesta_especial, data_atualizacao)
+                VALUES (0, 0, ?)
+            """, (agora(),))
+            estoque = cursor.execute("""
+                SELECT * FROM estoque ORDER BY id LIMIT 1
+            """).fetchone()
+
+        # O estoque único representa sempre o período aberto.
+        if estoque["periodo_id"] is not None and int(estoque["periodo_id"]) != periodo_id:
+            cursor.execute("""
+                UPDATE estoque SET periodo_id = ? WHERE id = ?
+            """, (periodo_id, estoque["id"]))
+            estoque = cursor.execute("SELECT * FROM estoque WHERE id = ?", (estoque["id"],)).fetchone()
+
+        estoque_normal_antes = int(estoque["cesta_normal"] or 0)
+        estoque_especial_antes = int(estoque["cesta_especial"] or 0)
+
+        if cesta_normal_necessaria > estoque_normal_antes:
+            motivo = (
+                f"Estoque insuficiente de cestas normais. "
+                f"Necessário: {cesta_normal_necessaria}; "
+                f"disponível: {estoque_normal_antes}."
+            )
+            cursor.execute("""
+                INSERT INTO historico (
+                    data_hora, tipo_identificacao, id_cracha, matricula,
+                    nome, setor, cesta_normal, cesta_especial, resultado, motivo,
+                    estoque_normal_antes, estoque_normal_depois,
+                    estoque_especial_antes, estoque_especial_depois, periodo_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                agora(), tipo_identificacao, colaborador["id_mat"],
+                colaborador["matricula"], colaborador["nome"], colaborador["setor"],
+                cesta_normal_necessaria, cesta_especial_necessaria, "SEM_ESTOQUE", motivo,
+                estoque_normal_antes, estoque_normal_antes,
+                estoque_especial_antes, estoque_especial_antes,
+                periodo_id,
+            ))
+            conexao.commit()
+            return {"sucesso": False, "resultado": "SEM_ESTOQUE", "motivo": motivo}
+
+        if cesta_especial_necessaria > estoque_especial_antes:
+            motivo = (
+                f"Estoque insuficiente de cestas especiais. "
+                f"Necessário: {cesta_especial_necessaria}; "
+                f"disponível: {estoque_especial_antes}."
+            )
+            cursor.execute("""
+                INSERT INTO historico (
+                    data_hora, tipo_identificacao, id_cracha, matricula,
+                    nome, setor, cesta_normal, cesta_especial, resultado, motivo,
+                    estoque_normal_antes, estoque_normal_depois,
+                    estoque_especial_antes, estoque_especial_depois, periodo_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                agora(), tipo_identificacao, colaborador["id_mat"],
+                colaborador["matricula"], colaborador["nome"], colaborador["setor"],
+                cesta_normal_necessaria, cesta_especial_necessaria, "SEM_ESTOQUE", motivo,
+                estoque_normal_antes, estoque_normal_antes,
+                estoque_especial_antes, estoque_especial_antes,
+                periodo_id,
+            ))
+            conexao.commit()
+            return {"sucesso": False, "resultado": "SEM_ESTOQUE", "motivo": motivo}
+
+        estoque_normal_depois = estoque_normal_antes - cesta_normal_necessaria
+        estoque_especial_depois = estoque_especial_antes - cesta_especial_necessaria
+        data_retirada = agora()
+
+        cursor.execute("""
+            UPDATE estoque
+            SET cesta_normal = ?, cesta_especial = ?, data_atualizacao = ?
+            WHERE id = ?
+        """, (
+            estoque_normal_depois, estoque_especial_depois,
+            data_retirada, estoque["id"],
+        ))
+
+        cursor.execute("""
+            UPDATE colaboradores
+            SET confirmacao_retirada = ?, data_hora_retirada = ?
+            WHERE id = ?
+        """, ("SIM", data_retirada, colaborador["id"]))
+
+        cursor.execute("""
+            INSERT INTO historico (
+                data_hora, tipo_identificacao, id_cracha, matricula,
+                nome, setor, cesta_normal, cesta_especial, resultado, motivo,
+                estoque_normal_antes, estoque_normal_depois,
+                estoque_especial_antes, estoque_especial_depois, periodo_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            data_retirada, tipo_identificacao, colaborador["id_mat"],
+            colaborador["matricula"], colaborador["nome"], colaborador["setor"],
+            cesta_normal_necessaria, cesta_especial_necessaria,
+            "LIBERADO", "Retirada realizada com sucesso.",
+            estoque_normal_antes, estoque_normal_depois,
+            estoque_especial_antes, estoque_especial_depois,
+            periodo_id,
+        ))
+
+        conexao.commit()
+
+        return {
+            "sucesso": True,
+            "resultado": "LIBERADO",
+            "data_hora": data_retirada,
+            "cesta_normal": cesta_normal_necessaria,
+            "cesta_especial": cesta_especial_necessaria,
+            "estoque_normal_antes": estoque_normal_antes,
+            "estoque_normal_depois": estoque_normal_depois,
+            "estoque_especial_antes": estoque_especial_antes,
+            "estoque_especial_depois": estoque_especial_depois,
         }
-    ).execute()
 
-    return {
-        "id": 1,
-        "periodo_id": periodo_id,
-        "cesta_normal": 0,
-        "cesta_especial": 0,
-        "atualizado_em": None,
-    }
-
-
-def configurar_estoque(cesta_normal, cesta_especial):
-    cliente = conectar()
-    periodo_id = obter_periodo_ativo_id()
-
-    payload = {
-        "id": 1,
-        "periodo_id": periodo_id,
-        "cesta_normal": _inteiro(cesta_normal),
-        "cesta_especial": _inteiro(cesta_especial),
-        "atualizado_em": agora(),
-    }
-
-    cliente.table("estoque").upsert(
-        payload,
-        on_conflict="id",
-    ).execute()
+    except Exception as erro:
+        conexao.rollback()
+        return {
+            "sucesso": False,
+            "resultado": "ERRO",
+            "motivo": str(erro),
+        }
+    finally:
+        conexao.close()
 
 
 # ============================================================
 # HISTÓRICO
 # ============================================================
 
-def registrar_historico(
-    periodo_id=None,
-    tipo_identificacao=None,
-    id_cracha=None,
-    matricula=None,
-    nome=None,
-    setor=None,
-    cesta_normal=0,
-    cesta_especial=0,
-    resultado=None,
-    motivo=None,
-    data_hora=None,
+def obter_historico(
+    limite=5000,
+    periodo_id=None
 ):
-    cliente = conectar()
 
-    if periodo_id is None:
-        periodo_id = obter_periodo_ativo_id()
-
-    payload = {
-        "periodo_id": periodo_id,
-        "data_hora": data_hora or agora(),
-        "tipo_identificacao": tipo_identificacao,
-        "id_cracha": id_cracha,
-        "matricula": matricula,
-        "nome": nome,
-        "setor": setor,
-        "cesta_normal": _inteiro(cesta_normal),
-        "cesta_especial": _inteiro(cesta_especial),
-        "resultado": resultado,
-        "motivo": motivo,
-    }
-
-    cliente.table("historico").insert(payload).execute()
-
-
-def registrar_tentativa_nao_encontrada(identificacao):
-    id_cracha = None
+    conexao = conectar()
 
     try:
-        id_cracha = int(float(str(identificacao).strip()))
-    except Exception:
-        id_cracha = None
 
-    registrar_historico(
-        tipo_identificacao="NÃO ENCONTRADO",
-        id_cracha=id_cracha,
-        matricula=str(identificacao).strip(),
-        nome=None,
-        setor=None,
-        cesta_normal=0,
-        cesta_especial=0,
-        resultado="NAO_ENCONTRADO",
-        motivo="ID do crachá ou matrícula não encontrado no período ativo.",
-    )
-
-
-def obter_historico(limite=5000, periodo_id=None):
-    cliente = conectar()
-
-    if periodo_id is None:
-        periodo_id = obter_periodo_ativo_id()
-
-    consulta = (
-        cliente
-        .table("historico")
-        .select("*")
-        .eq("periodo_id", periodo_id)
-        .order("id", desc=True)
-        .limit(limite)
-    )
-
-    resposta = consulta.execute()
-
-    return resposta.data or []
-
-
-# ============================================================
-# STATUS DA ENTREGA
-# ============================================================
-
-def obter_status_entrega(periodo_id=None):
-    if periodo_id is None:
-        periodo = obter_periodo_ativo()
-    else:
-        cliente = conectar()
-
-        resposta = (
-            cliente
-            .table("periodos_entrega")
-            .select("*")
-            .eq("id", periodo_id)
-            .limit(1)
-            .execute()
-        )
-
-        if not resposta.data:
-            periodo = obter_periodo_ativo()
+        if periodo_id is None:
+            registros = conexao.execute("""
+                SELECT * FROM historico ORDER BY id DESC LIMIT ?
+            """, (limite,)).fetchall()
         else:
-            periodo = resposta.data[0]
+            registros = conexao.execute("""
+                SELECT * FROM historico WHERE periodo_id = ? ORDER BY id DESC LIMIT ?
+            """, (int(periodo_id), limite)).fetchall()
 
-    return periodo
+        return registros
 
+    finally:
 
-def entrega_esta_finalizada():
-    status = obter_status_entrega()
-
-    return str(status.get("status", "")).upper() == "FINALIZADA"
-
-
-def finalizar_entrega(usuario=None, observacao=None):
-    cliente = conectar()
-    periodo = obter_periodo_ativo()
-    periodo_id = periodo["id"]
-    data_hora = agora()
-
-    payload = {
-        "status": "FINALIZADA",
-        "ativo": True,
-        "data_finalizacao": data_hora,
-        "usuario_finalizacao": usuario,
-        "observacao": observacao,
-        "updated_at": datetime.now().isoformat(),
-    }
-
-    cliente.table("periodos_entrega").update(payload).eq("id", periodo_id).execute()
-
-    cliente.table("controle_entrega").upsert(
-        {
-            "id": 1,
-            "periodo_id": periodo_id,
-            "status": "FINALIZADA",
-            "data_inicio": periodo.get("data_inicio"),
-            "data_finalizacao": data_hora,
-            "usuario_finalizacao": usuario,
-            "observacao": observacao,
-            "updated_at": datetime.now().isoformat(),
-        },
-        on_conflict="id",
-    ).execute()
-
-    registrar_historico(
-        periodo_id=periodo_id,
-        tipo_identificacao="SISTEMA",
-        resultado="ENTREGA_FINALIZADA",
-        motivo=f"Entrega finalizada. Usuário: {usuario or '-'}",
-        data_hora=data_hora,
-    )
-
-    return {
-        "sucesso": True,
-        "mensagem": "Entrega finalizada com sucesso.",
-    }
-
-
-def reabrir_entrega(usuario=None):
-    cliente = conectar()
-    periodo = obter_periodo_ativo()
-    periodo_id = periodo["id"]
-
-    cliente.table("periodos_entrega").update(
-        {
-            "status": "ABERTA",
-            "data_finalizacao": None,
-            "usuario_finalizacao": usuario,
-            "updated_at": datetime.now().isoformat(),
-        }
-    ).eq("id", periodo_id).execute()
-
-    cliente.table("controle_entrega").upsert(
-        {
-            "id": 1,
-            "periodo_id": periodo_id,
-            "status": "ABERTA",
-            "data_inicio": periodo.get("data_inicio"),
-            "data_finalizacao": None,
-            "usuario_finalizacao": usuario,
-            "observacao": None,
-            "updated_at": datetime.now().isoformat(),
-        },
-        on_conflict="id",
-    ).execute()
-
-    registrar_historico(
-        periodo_id=periodo_id,
-        tipo_identificacao="SISTEMA",
-        resultado="ENTREGA_REABERTA",
-        motivo=f"Entrega reaberta. Usuário: {usuario or '-'}",
-    )
-
-    return {
-        "sucesso": True,
-        "mensagem": "Entrega reaberta com sucesso.",
-    }
-
-
-# ============================================================
-# LIBERAÇÃO DE CESTA
-# ============================================================
-
-def _buscar_colaborador_por_id(colaborador_id, periodo_id=None):
-    cliente = conectar()
-
-    if periodo_id is None:
-        periodo_id = obter_periodo_ativo_id()
-
-    resposta = (
-        cliente
-        .table("colaboradores")
-        .select("*")
-        .eq("id", colaborador_id)
-        .eq("periodo_id", periodo_id)
-        .limit(1)
-        .execute()
-    )
-
-    if not resposta.data:
-        return None
-
-    return resposta.data[0]
-
-
-def liberar_cesta(colaborador_id, tipo_identificacao):
-    cliente = conectar()
-
-    if entrega_esta_finalizada():
-        colaborador = _buscar_colaborador_por_id(colaborador_id)
-
-        if colaborador:
-            registrar_historico(
-                tipo_identificacao=tipo_identificacao,
-                id_cracha=colaborador.get("id_mat"),
-                matricula=colaborador.get("matricula"),
-                nome=colaborador.get("nome"),
-                setor=colaborador.get("setor"),
-                cesta_normal=0,
-                cesta_especial=0,
-                resultado="NEGADO",
-                motivo="Entrega finalizada. Não é possível realizar nova retirada.",
-            )
-
-        return {
-            "sucesso": False,
-            "resultado": "NEGADO",
-            "motivo": "Entrega finalizada. Não é possível realizar nova retirada.",
-        }
-
-    try:
-        resposta = (
-            cliente
-            .rpc(
-                "liberar_cesta_rpc",
-                {
-                    "p_colaborador_id": int(colaborador_id),
-                    "p_tipo_identificacao": tipo_identificacao,
-                },
-            )
-            .execute()
-        )
-
-        dados = resposta.data
-
-        if isinstance(dados, list):
-            if not dados:
-                return {
-                    "sucesso": False,
-                    "resultado": "ERRO",
-                    "motivo": "A função de liberação não retornou dados.",
-                }
-
-            dados = dados[0]
-
-        if not isinstance(dados, dict):
-            return {
-                "sucesso": False,
-                "resultado": "ERRO",
-                "motivo": "Resposta inválida da função de liberação.",
-            }
-
-        return dados
-
-    except Exception as erro:
-        return {
-            "sucesso": False,
-            "resultado": "ERRO",
-            "motivo": f"Erro ao liberar cesta no Supabase: {erro}",
-        }
+        conexao.close()
 
 
 # ============================================================
@@ -634,171 +854,32 @@ def liberar_cesta(colaborador_id, tipo_identificacao):
 # ============================================================
 
 def obter_indicadores(periodo_id=None):
-    cliente = conectar()
+    conexao = conectar()
+    try:
+        filtro = ""
+        params = ()
+        if periodo_id is not None:
+            filtro = " AND periodo_id = ?"
+            params = (int(periodo_id),)
 
-    if periodo_id is None:
-        periodo_id = obter_periodo_ativo_id()
+        def contar(resultado):
+            return conexao.execute(f"SELECT COUNT(*) FROM historico WHERE resultado = ?{filtro}", (resultado,) + params).fetchone()[0]
 
-    resposta = (
-        cliente
-        .table("historico")
-        .select("*")
-        .eq("periodo_id", periodo_id)
-        .limit(10000)
-        .execute()
-    )
-
-    registros = resposta.data or []
-
-    liberadas = 0
-    negadas = 0
-    duplicadas = 0
-    nao_encontradas = 0
-    cestas_normais = 0
-    cestas_especiais = 0
-
-    for registro in registros:
-        resultado = registro.get("resultado")
-
-        if resultado == "LIBERADO":
-            liberadas += 1
-            cestas_normais += _inteiro(registro.get("cesta_normal"))
-            cestas_especiais += _inteiro(registro.get("cesta_especial"))
-
-        elif resultado == "NEGADO":
-            negadas += 1
-
-        elif resultado == "DUPLICADO":
-            duplicadas += 1
-
-        elif resultado == "NAO_ENCONTRADO":
-            nao_encontradas += 1
-
-    return {
-        "liberadas": liberadas,
-        "negadas": negadas,
-        "duplicadas": duplicadas,
-        "nao_encontradas": nao_encontradas,
-        "cestas_normais": cestas_normais,
-        "cestas_especiais": cestas_especiais,
-        "tentativas": len(registros),
-    }
-
-
-# ============================================================
-# CONSULTA DE RETIRADAS
-# ============================================================
-
-def _colaborador_autorizado(colaborador):
-    cesta_normal = _inteiro(colaborador.get("cesta_normal"))
-    cesta_especial = _inteiro(colaborador.get("cesta_especial"))
-    perdeu = _eh_sim(colaborador.get("perde"))
-
-    return (cesta_normal > 0 or cesta_especial > 0) and not perdeu
-
-
-def _colaborador_retirou(colaborador):
-    return _eh_sim(colaborador.get("confirmacao_retirada"))
-
-
-def obter_consulta_retiradas(situacao="PENDENTES", busca=None, periodo_id=None):
-    cliente = conectar()
-
-    if periodo_id is None:
-        periodo_id = obter_periodo_ativo_id()
-
-    resposta = (
-        cliente
-        .table("colaboradores")
-        .select(
-            "id,id_mat,matricula,matricula_num,nome,setor,"
-            "cesta_normal,cesta_especial,perde,"
-            "confirmacao_retirada,data_hora_retirada,periodo_id"
-        )
-        .eq("periodo_id", periodo_id)
-        .order("nome", desc=False)
-        .limit(20000)
-        .execute()
-    )
-
-    registros = resposta.data or []
-
-    busca_texto = str(busca or "").strip().lower()
-
-    resultado = []
-
-    for colaborador in registros:
-        autorizado = _colaborador_autorizado(colaborador)
-        retirou = _colaborador_retirou(colaborador)
-
-        if autorizado and retirou:
-            status = "RETIRADO"
-        elif autorizado and not retirou:
-            status = "PENDENTE"
-        else:
-            status = "NÃO AUTORIZADO"
-
-        incluir = False
-
-        if situacao == "TODOS":
-            incluir = True
-        elif situacao == "PENDENTES" and status == "PENDENTE":
-            incluir = True
-        elif situacao == "RETIRADOS" and status == "RETIRADO":
-            incluir = True
-        elif situacao == "NAO_AUTORIZADOS" and status == "NÃO AUTORIZADO":
-            incluir = True
-
-        if not incluir:
-            continue
-
-        if busca_texto:
-            texto_linha = " ".join(
-                [
-                    str(colaborador.get("matricula") or ""),
-                    str(colaborador.get("id_mat") or ""),
-                    str(colaborador.get("nome") or ""),
-                    str(colaborador.get("setor") or ""),
-                ]
-            ).lower()
-
-            if busca_texto not in texto_linha:
-                continue
-
-        item = dict(colaborador)
-        item["situacao"] = status
-        resultado.append(item)
-
-    return resultado
-
-
-def obter_resumo_consulta(periodo_id=None):
-    todos = obter_consulta_retiradas(
-        situacao="TODOS",
-        periodo_id=periodo_id,
-    )
-
-    autorizados = 0
-    pendentes = 0
-    retirados = 0
-    nao_autorizados = 0
-
-    for colaborador in todos:
-        situacao = colaborador.get("situacao")
-
-        if situacao == "PENDENTE":
-            pendentes += 1
-            autorizados += 1
-        elif situacao == "RETIRADO":
-            retirados += 1
-            autorizados += 1
-        else:
-            nao_autorizados += 1
-
-    return {
-        "total": len(todos),
-        "autorizados": autorizados,
-        "pendentes": pendentes,
-        "retirados": retirados,
-        "nao_autorizados": nao_autorizados,
-    }
+        liberadas = contar("LIBERADO")
+        negadas = contar("NEGADO")
+        duplicadas = contar("DUPLICADO")
+        nao_encontradas = contar("NAO_ENCONTRADO")
+        cestas_normais = conexao.execute(f"SELECT COALESCE(SUM(cesta_normal),0) FROM historico WHERE resultado='LIBERADO'{filtro}", params).fetchone()[0]
+        cestas_especiais = conexao.execute(f"SELECT COALESCE(SUM(cesta_especial),0) FROM historico WHERE resultado='LIBERADO'{filtro}", params).fetchone()[0]
+        tentativas = conexao.execute(f"SELECT COUNT(*) FROM historico WHERE 1=1{filtro}", params).fetchone()[0]
+        return {
+            "liberadas": liberadas,
+            "negadas": negadas,
+            "duplicadas": duplicadas,
+            "nao_encontradas": nao_encontradas,
+            "cestas_normais": cestas_normais,
+            "cestas_especiais": cestas_especiais,
+            "tentativas": tentativas,
+        }
+    finally:
+        conexao.close()
