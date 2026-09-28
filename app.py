@@ -1,5 +1,6 @@
 import time
 import textwrap
+import base64
 from html import escape
 from pathlib import Path
 
@@ -27,6 +28,16 @@ from database.database import (
 )
 from services.importador import importar_excel
 from services.identificacao import identificar, cadastrar_cracha, buscar_por_matricula
+from services.audio_manager import (
+    TIPOS_AUDIO,
+    obter_audio_evento,
+    listar_configuracoes_audio,
+    salvar_audio_personalizado,
+    definir_audio_ativo,
+    restaurar_audio_padrao,
+    verificar_setup_audio,
+)
+from services.supabase_client import service_role_configurada
 from services.autenticacao import (
     inicializar_usuarios,
     autenticar,
@@ -79,96 +90,96 @@ def texto_campo(valor):
 
 
 # ============================================================
-# ÁUDIO DA RETIRADA
+# ÁUDIOS DO TERMINAL
 # ============================================================
 
-BASE_DIR = Path(__file__).resolve().parent
-AUDIO_DIR = BASE_DIR / "assets" / "audio"
+
+def tipo_audio_resultado(resultado):
+    """Traduz o resultado da operação para o evento de áudio configurável."""
+    if not resultado:
+        return None
+
+    if resultado.get("sucesso"):
+        try:
+            normal = int(resultado.get("cesta_normal") or 0)
+        except (TypeError, ValueError):
+            normal = 0
+
+        try:
+            especial = int(resultado.get("cesta_especial") or 0)
+        except (TypeError, ValueError):
+            especial = 0
+
+        if normal > 0 and especial > 0:
+            return "cesta_normal_especial"
+        if normal > 0:
+            return "cesta_normal"
+        if especial > 0:
+            return "cesta_especial"
+        return None
+
+    status = texto_campo(resultado.get("resultado")).upper()
+    mapa = {
+        "NEGADO": "negado",
+        "DUPLICADO": "duplicado",
+        "SEM_ESTOQUE": "sem_estoque",
+        "NAO_ENCONTRADO": "nao_encontrado",
+        "DEMITIDO": "demitido",
+        "ERRO_CRACHA": "erro_cracha",
+    }
+    return mapa.get(status)
 
 
-def obter_audio_retirada(cesta_normal, cesta_especial):
-    """
-    Retorna o arquivo e a frase correspondente às cestas liberadas.
-
-    Regra:
-        normal > 0 e especial == 0 -> Uma cesta normal
-        normal == 0 e especial > 0 -> Uma cesta especial
-        normal > 0 e especial > 0 -> Uma cesta normal e uma especial
-    """
-
-    try:
-        normal = int(cesta_normal or 0)
-    except (TypeError, ValueError):
-        normal = 0
-
-    try:
-        especial = int(cesta_especial or 0)
-    except (TypeError, ValueError):
-        especial = 0
-
-    if normal > 0 and especial > 0:
-        return (
-            AUDIO_DIR / "cesta_normal_especial.wav",
-            "Uma cesta normal e uma especial.",
-        )
-
-    if normal > 0:
-        return (
-            AUDIO_DIR / "cesta_normal.wav",
-            "Uma cesta normal.",
-        )
-
-    if especial > 0:
-        return (
-            AUDIO_DIR / "cesta_especial.wav",
-            "Uma cesta especial.",
-        )
-
-    return None, ""
-
-
-def tocar_audio_retirada(resultado):
-    """
-    Reproduz o aviso somente uma vez para cada retirada liberada.
-
-    O identificador da operação usa matrícula + data/hora + quantidades,
-    evitando que o áudio repita em cada rerun do Streamlit.
-    """
-
-    if not resultado or not resultado.get("sucesso"):
+def tocar_audio_resultado(resultado):
+    """Toca uma única vez o áudio configurado para a operação atual."""
+    tipo = tipo_audio_resultado(resultado)
+    if not tipo:
         return
 
-    arquivo, frase = obter_audio_retirada(
-        resultado.get("cesta_normal", 0),
-        resultado.get("cesta_especial", 0),
-    )
-
-    if arquivo is None:
+    audio = obter_audio_evento(tipo)
+    if not audio.get("ativo") or not audio.get("dados"):
         return
 
     identificador = "|".join(
         [
+            tipo,
             texto_campo(resultado.get("matricula")),
-            texto_campo(resultado.get("data_hora")),
-            str(resultado.get("cesta_normal", 0)),
-            str(resultado.get("cesta_especial", 0)),
+            texto_campo(resultado.get("resultado")),
+            str(st.session_state.get("ultimo_timestamp", "")),
         ]
     )
 
     if st.session_state.get("ultimo_audio_operacao") == identificador:
         return
 
-    if arquivo.exists():
-        st.audio(
-            str(arquivo),
-            format="audio/wav",
-            autoplay=True,
-        )
-        st.session_state.ultimo_audio_operacao = identificador
-        st.session_state.ultima_frase_audio = frase
-    else:
-        # Não bloqueia a retirada se os arquivos de áudio não existirem.
-        st.session_state.ultima_frase_audio = ""
+    st.audio(
+        audio["dados"],
+        format=audio.get("mime_type") or "audio/mpeg",
+        autoplay=True,
+    )
+
+    st.session_state.ultimo_audio_operacao = identificador
+    st.session_state.ultima_frase_audio = TIPOS_AUDIO[tipo]["titulo"]
+
+
+def render_preview_audio(dados, mime_type="audio/mpeg"):
+    """Player visível para a tela administrativa, sem sofrer o CSS do st.audio."""
+    if not dados:
+        st.info("Nenhum áudio disponível para prévia.")
+        return
+
+    conteudo = base64.b64encode(bytes(dados)).decode("ascii")
+    mime = valor_seguro(mime_type or "audio/mpeg")
+    render_html(
+        f"""
+        <div style="padding:8px 0 4px 0;">
+            <audio controls preload="metadata" style="width:100%; height:42px;">
+                <source src="data:{mime};base64,{conteudo}" type="{mime}">
+                Seu navegador não suporta reprodução de áudio.
+            </audio>
+        </div>
+        """
+    )
 
 
 # ============================================================
@@ -774,6 +785,7 @@ with st.sidebar:
             "Dashboard",
             "Histórico",
             "Períodos",
+            "Áudios",
             "Estoque",
             "Importação",
             "Usuários",
@@ -1203,6 +1215,9 @@ def tela_terminal():
 
     status_resultado = resultado.get("resultado", "")
 
+    if status_resultado not in {"", "AGUARDANDO_CRACHA"}:
+        tocar_audio_resultado(resultado)
+
     if status_resultado == "AGUARDANDO_CRACHA":
         render_html(
             """
@@ -1254,9 +1269,6 @@ def tela_terminal():
             st.metric("🥫 Cesta normal", resultado.get("cesta_normal", 0))
         with col2:
             st.metric("⭐ Cesta especial", resultado.get("cesta_especial", 0))
-
-        # Aviso por voz da quantidade/tipo de cesta liberada.
-        tocar_audio_retirada(resultado)
 
         if resultado.get("cracha_cadastrado"):
             st.success("🪪 Crachá cadastrado e cesta liberada automaticamente.")
@@ -1786,6 +1798,196 @@ def tela_periodos():
 
 
 # ============================================================
+# ADMINISTRAÇÃO DE ÁUDIOS
+# ============================================================
+
+
+def tela_audios():
+    st.title("🔊 Administração de áudios")
+    st.caption(
+        "Os áudios personalizados ficam no Supabase Storage. "
+        "Você pode trocar a voz sem alterar o código ou fazer novo deploy."
+    )
+
+    setup = verificar_setup_audio()
+    if not setup["ok"]:
+        st.error(
+            "O armazenamento de áudios ainda não está preparado no Supabase. "
+            "Execute o arquivo supabase_audio_setup.sql no SQL Editor."
+        )
+        with st.expander("Detalhes técnicos"):
+            st.code(setup.get("erro") or "Erro não informado.")
+        return
+
+    if service_role_configurada():
+        st.success("🔐 Chave administrativa do Supabase configurada no servidor.")
+    else:
+        st.warning(
+            "SUPABASE_SERVICE_ROLE_KEY não foi encontrada. O sistema está usando "
+            "SUPABASE_KEY como fallback. Para o bucket privado, configure a service role "
+            "nos Secrets do Streamlit e nunca a envie ao GitHub."
+        )
+
+    configuracoes = listar_configuracoes_audio()
+    mapa_config = {item["tipo"]: item for item in configuracoes}
+
+    opcoes = list(TIPOS_AUDIO.keys())
+    tipo = st.selectbox(
+        "Evento",
+        opcoes,
+        format_func=lambda chave: TIPOS_AUDIO[chave]["titulo"],
+        key="audio_admin_tipo",
+    )
+
+    info = TIPOS_AUDIO[tipo]
+    config = mapa_config[tipo]
+
+    st.info(info["descricao"])
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Status", "ATIVO" if config["ativo"] else "DESATIVADO")
+    with col2:
+        st.metric("Fonte", config["fonte"])
+    with col3:
+        st.metric("Arquivo", config["nome_arquivo"] or "Padrão / nenhum")
+
+    if config.get("atualizado_em"):
+        st.caption(
+            f"Última alteração: {config['atualizado_em']} "
+            f"• Usuário: {config.get('atualizado_por') or '-'}"
+        )
+
+    st.subheader("▶️ Áudio atual")
+    audio_atual = obter_audio_evento(tipo)
+    if audio_atual.get("dados"):
+        render_preview_audio(
+            audio_atual["dados"],
+            audio_atual.get("mime_type") or "audio/mpeg",
+        )
+    elif not config["ativo"]:
+        st.warning("Este áudio está desativado.")
+    else:
+        st.info("Não existe áudio configurado para este evento.")
+
+    st.divider()
+    st.subheader("⬆️ Enviar novo áudio")
+
+    arquivo = st.file_uploader(
+        "Escolha um arquivo MP3, WAV ou OGG",
+        type=["mp3", "wav", "ogg"],
+        key=f"audio_upload_{tipo}",
+        help="Tamanho máximo: 10 MB.",
+    )
+
+    if arquivo is not None:
+        dados_upload = arquivo.getvalue()
+        st.caption(
+            f"Arquivo selecionado: {arquivo.name} "
+            f"• {len(dados_upload) / 1024:.1f} KB"
+        )
+        render_preview_audio(
+            dados_upload,
+            arquivo.type or (
+                "audio/mpeg" if arquivo.name.lower().endswith(".mp3")
+                else "audio/ogg" if arquivo.name.lower().endswith(".ogg")
+                else "audio/wav"
+            ),
+        )
+
+        if st.button(
+            "💾 Salvar no Supabase",
+            type="primary",
+            use_container_width=True,
+            key=f"audio_salvar_{tipo}",
+        ):
+            try:
+                salvar_audio_personalizado(
+                    tipo,
+                    arquivo.name,
+                    dados_upload,
+                    usuario=st.session_state.usuario,
+                )
+                st.success("Áudio salvo no Supabase com sucesso.")
+                st.rerun()
+            except Exception as erro:
+                st.error(f"Não foi possível salvar o áudio: {erro}")
+
+    st.divider()
+    st.subheader("⚙️ Comportamento")
+
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        novo_status = not bool(config["ativo"])
+        texto_status = (
+            "🔇 Desativar no Terminal"
+            if config["ativo"]
+            else "🔊 Ativar no Terminal"
+        )
+        if st.button(
+            texto_status,
+            use_container_width=True,
+            key=f"audio_status_{tipo}",
+        ):
+            try:
+                definir_audio_ativo(
+                    tipo,
+                    novo_status,
+                    usuario=st.session_state.usuario,
+                )
+                st.success("Status do áudio atualizado.")
+                st.rerun()
+            except Exception as erro:
+                st.error(f"Não foi possível atualizar o status: {erro}")
+
+    with col_b:
+        texto_restaurar = (
+            "↩️ Restaurar áudio padrão"
+            if info.get("padrao_local")
+            else "🗑️ Remover áudio personalizado"
+        )
+
+        if st.button(
+            texto_restaurar,
+            use_container_width=True,
+            key=f"audio_restaurar_{tipo}",
+        ):
+            try:
+                restaurar_audio_padrao(
+                    tipo,
+                    usuario=st.session_state.usuario,
+                )
+                st.success("Configuração de áudio restaurada.")
+                st.rerun()
+            except Exception as erro:
+                st.error(f"Não foi possível restaurar o áudio: {erro}")
+
+    st.divider()
+    st.subheader("📋 Visão geral")
+
+    tabela = pd.DataFrame(
+        [
+            {
+                "Evento": item["titulo"],
+                "Ativo": "SIM" if item["ativo"] else "NÃO",
+                "Fonte": item["fonte"],
+                "Arquivo": item["nome_arquivo"] or "-",
+                "Atualizado por": item["atualizado_por"] or "-",
+                "Atualizado em": item["atualizado_em"] or "-",
+            }
+            for item in configuracoes
+        ]
+    )
+
+    st.dataframe(
+        tabela,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+# ============================================================
 # ESTOQUE
 # ============================================================
 
@@ -2123,6 +2325,8 @@ elif pagina == "Histórico" and eh_admin:
     tela_historico()
 elif pagina == "Períodos" and eh_admin:
     tela_periodos()
+elif pagina == "Áudios" and eh_admin:
+    tela_audios()
 elif pagina == "Estoque" and eh_admin:
     tela_estoque()
 elif pagina == "Importação" and eh_admin:
