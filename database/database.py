@@ -1,6 +1,7 @@
-from datetime import datetime
+import streamlit as st
 
 from services.supabase_client import obter_supabase
+from services.tempo import agora_texto, agora_iso
 
 
 # ============================================================
@@ -16,7 +17,8 @@ def conectar():
 # ============================================================
 
 def agora():
-    return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    """Data/hora no fuso local (Streamlit Cloud roda em UTC)."""
+    return agora_texto()
 
 
 def _inteiro(valor, padrao=0):
@@ -67,7 +69,10 @@ def _tem_perda(valor):
 # PERÍODOS
 # ============================================================
 
-def obter_periodo_ativo():
+@st.cache_data(ttl=15, show_spinner=False)
+def _buscar_periodo_ativo():
+    """Consulta o período ativo. Fica em cache por alguns segundos porque
+    o app pergunta pelo período ativo várias vezes em cada leitura."""
     cliente = conectar()
 
     resposta = (
@@ -82,6 +87,22 @@ def obter_periodo_ativo():
 
     if resposta.data:
         return resposta.data[0]
+
+    return None
+
+
+def limpar_cache_periodo():
+    """Chamar sempre que o período for criado, finalizado ou reaberto."""
+    _buscar_periodo_ativo.clear()
+
+
+def obter_periodo_ativo():
+    periodo = _buscar_periodo_ativo()
+
+    if periodo:
+        return periodo
+
+    cliente = conectar()
 
     payload = {
         "nome": "Período inicial",
@@ -98,6 +119,8 @@ def obter_periodo_ativo():
         .insert(payload)
         .execute()
     )
+
+    limpar_cache_periodo()
 
     return resposta.data[0]
 
@@ -155,7 +178,7 @@ def criar_novo_periodo(nome, usuario=None, observacao=None, zerar_estoque=True):
                 "status": "FINALIZADA",
                 "data_finalizacao": periodo.get("data_finalizacao") or data_hora,
                 "usuario_finalizacao": periodo.get("usuario_finalizacao") or usuario,
-                "updated_at": datetime.now().isoformat(),
+                "updated_at": agora_iso(),
             }
         ).eq("id", periodo["id"]).execute()
 
@@ -170,7 +193,7 @@ def criar_novo_periodo(nome, usuario=None, observacao=None, zerar_estoque=True):
                 "data_inicio": data_hora,
                 "usuario_criacao": usuario,
                 "observacao": observacao,
-                "updated_at": datetime.now().isoformat(),
+                "updated_at": agora_iso(),
             }
         )
         .execute()
@@ -178,6 +201,8 @@ def criar_novo_periodo(nome, usuario=None, observacao=None, zerar_estoque=True):
 
     novo_periodo = resposta.data[0]
     novo_periodo_id = novo_periodo["id"]
+
+    limpar_cache_periodo()
 
     cliente.table("controle_entrega").upsert(
         {
@@ -188,7 +213,7 @@ def criar_novo_periodo(nome, usuario=None, observacao=None, zerar_estoque=True):
             "data_finalizacao": None,
             "usuario_finalizacao": None,
             "observacao": observacao,
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": agora_iso(),
         },
         on_conflict="id",
     ).execute()
@@ -424,6 +449,7 @@ def _consultar_historico_paginado(
     limite=5000,
     periodo_id=None,
     somente_sem_periodo=False,
+    colunas="*",
 ):
     cliente = conectar()
     limite = max(1, int(limite))
@@ -440,7 +466,7 @@ def _consultar_historico_paginado(
         consulta = (
             cliente
             .table("historico")
-            .select("*")
+            .select(colunas if colunas == "*" else f"id,{colunas}")
             .order("id", desc=True)
         )
 
@@ -608,10 +634,11 @@ def finalizar_entrega(usuario=None, observacao=None):
         "data_finalizacao": data_hora,
         "usuario_finalizacao": usuario,
         "observacao": observacao,
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": agora_iso(),
     }
 
     cliente.table("periodos_entrega").update(payload).eq("id", periodo_id).execute()
+    limpar_cache_periodo()
 
     cliente.table("controle_entrega").upsert(
         {
@@ -622,7 +649,7 @@ def finalizar_entrega(usuario=None, observacao=None):
             "data_finalizacao": data_hora,
             "usuario_finalizacao": usuario,
             "observacao": observacao,
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": agora_iso(),
         },
         on_conflict="id",
     ).execute()
@@ -651,9 +678,11 @@ def reabrir_entrega(usuario=None):
             "status": "ABERTA",
             "data_finalizacao": None,
             "usuario_finalizacao": usuario,
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": agora_iso(),
         }
     ).eq("id", periodo_id).execute()
+
+    limpar_cache_periodo()
 
     cliente.table("controle_entrega").upsert(
         {
@@ -664,7 +693,7 @@ def reabrir_entrega(usuario=None):
             "data_finalizacao": None,
             "usuario_finalizacao": usuario,
             "observacao": None,
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": agora_iso(),
         },
         on_conflict="id",
     ).execute()
@@ -815,21 +844,16 @@ def liberar_cesta(colaborador_id, tipo_identificacao):
 # ============================================================
 
 def obter_indicadores(periodo_id=None):
-    cliente = conectar()
-
     if periodo_id is None:
         periodo_id = obter_periodo_ativo_id()
 
-    resposta = (
-        cliente
-        .table("historico")
-        .select("*")
-        .eq("periodo_id", periodo_id)
-        .limit(10000)
-        .execute()
+    # O Supabase devolve no máximo 1.000 linhas por consulta. Antes, com
+    # .limit(10000), os indicadores paravam de contar após 1.000 registros.
+    registros = _consultar_historico_paginado(
+        limite=1_000_000,
+        periodo_id=periodo_id,
+        colunas="resultado,tipo_identificacao,cesta_normal,cesta_especial",
     )
-
-    registros = resposta.data or []
 
     liberadas = 0
     negadas = 0
@@ -838,8 +862,17 @@ def obter_indicadores(periodo_id=None):
     cestas_normais = 0
     cestas_especiais = 0
 
+    tentativas = 0
+
     for registro in registros:
         resultado = registro.get("resultado")
+
+        # Eventos do sistema (novo período, cadastro de crachá...) não são
+        # tentativas de retirada.
+        if registro.get("tipo_identificacao") != "SISTEMA" and not str(
+            resultado or ""
+        ).startswith("CRACHA_"):
+            tentativas += 1
 
         if resultado == "LIBERADO":
             liberadas += 1
@@ -862,7 +895,7 @@ def obter_indicadores(periodo_id=None):
         "nao_encontradas": nao_encontradas,
         "cestas_normais": cestas_normais,
         "cestas_especiais": cestas_especiais,
-        "tentativas": len(registros),
+        "tentativas": tentativas,
     }
 
 
@@ -948,11 +981,19 @@ def obter_consulta_retiradas(situacao="PENDENTES", busca=None, periodo_id=None):
     return resultado
 
 
-def obter_resumo_consulta(periodo_id=None):
-    todos = obter_consulta_retiradas(
-        situacao="TODOS",
-        periodo_id=periodo_id,
-    )
+def obter_resumo_consulta(periodo_id=None, registros=None):
+    """Resume a situação do período.
+
+    Se a lista já carregada (situacao="TODOS") for informada em
+    `registros`, evita baixar todos os colaboradores uma segunda vez.
+    """
+    if registros is not None:
+        todos = registros
+    else:
+        todos = obter_consulta_retiradas(
+            situacao="TODOS",
+            periodo_id=periodo_id,
+        )
 
     autorizados = 0
     pendentes = 0
