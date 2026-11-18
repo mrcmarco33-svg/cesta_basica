@@ -247,6 +247,33 @@ def inicializar_uma_vez():
 inicializar_uma_vez()
 
 
+def salvar_tema_no_endereco(tema):
+    """Guarda o tema no endereço da página (?tema=escuro).
+
+    O session_state se perde quando a sessão do Streamlit reinicia
+    (queda de conexão, servidor reiniciado, F5). Pelo endereço, o tema
+    escolhido volta sozinho em vez de cair no padrão Claro.
+    """
+    try:
+        valor = str(tema).lower()
+        if st.query_params.get("tema") != valor:
+            st.query_params["tema"] = valor
+    except Exception:
+        pass
+
+
+def carregar_tema_do_endereco():
+    try:
+        valor = str(st.query_params.get("tema") or "").lower()
+    except Exception:
+        valor = ""
+    if valor == "escuro":
+        return "Escuro"
+    if valor == "claro":
+        return "Claro"
+    return None
+
+
 # ============================================================
 # SESSION STATE
 # ============================================================
@@ -281,6 +308,16 @@ for chave, valor in valores_iniciais.items():
     if chave not in st.session_state:
         st.session_state[chave] = valor
 
+# Sessão nova (primeira abertura ou sessão reiniciada): recupera o tema
+# escolhido pelo endereço da página.
+if not st.session_state.get("tema_carregado"):
+    tema_endereco = carregar_tema_do_endereco()
+    if tema_endereco:
+        st.session_state.tema = tema_endereco
+    st.session_state.tema_carregado = True
+
+salvar_tema_no_endereco(st.session_state.tema)
+
 
 # ============================================================
 # LOGIN
@@ -307,6 +344,9 @@ def ir_para_pagina(nome_pagina):
 
 def mudar_tema(tema):
     st.session_state.tema = tema
+    salvar_tema_no_endereco(tema)
+
+
 
 
 def sair():
@@ -1714,7 +1754,9 @@ def focar_campo_leitura():
     marcador = (
         f"{st.session_state.ultimo_timestamp}-"
         f"{st.session_state.aguardando_cracha}-"
-        f"{st.session_state.modo_cracha}"
+        f"{st.session_state.modo_cracha}-"
+        f"{st.session_state.tema}-"
+        f"{st.session_state.pagina}"
     )
     components.html(
         f"""
