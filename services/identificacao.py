@@ -1,4 +1,5 @@
 from services.supabase_client import obter_supabase
+from services import cadastro
 from database.database import obter_periodo_ativo_id
 
 
@@ -164,51 +165,93 @@ def cracha_ja_cadastrado(id_cracha, ignorar_colaborador_id=None):
     return colaborador
 
 
-def cadastrar_cracha(colaborador_id, id_cracha):
-    id_cracha = normalizar_id_cracha(
-        id_cracha
-    )
-
-    if id_cracha is None:
-        return {
-            "sucesso": False,
-            "motivo": "ID do crachá inválido.",
-        }
-
-    periodo_id = obter_periodo_ativo_id()
-
-    duplicado = cracha_ja_cadastrado(
-        id_cracha,
-        ignorar_colaborador_id=colaborador_id,
-    )
-
-    if duplicado:
-        return {
-            "sucesso": False,
-            "motivo": (
-                "Este crachá já está cadastrado neste período para "
-                f"{duplicado.get('nome', 'outro colaborador')}."
-            ),
-        }
-
-    cliente = _cliente()
-
-    (
-        cliente
+def _colaborador_periodo_por_id(colaborador_id, periodo_id):
+    resposta = (
+        _cliente()
         .table("colaboradores")
-        .update(
-            {
-                "id_mat": id_cracha,
-            }
-        )
+        .select("*")
         .eq("periodo_id", periodo_id)
         .eq("id", colaborador_id)
+        .limit(1)
         .execute()
     )
 
+    return resposta.data[0] if resposta.data else None
+
+
+def cadastrar_cracha(colaborador_id, id_cracha, usuario=None):
+    """Cadastra/atualiza o crachá no cadastro permanente e no período ativo."""
+    periodo_id = obter_periodo_ativo_id()
+    colaborador = _colaborador_periodo_por_id(colaborador_id, periodo_id)
+
+    if colaborador is None:
+        return {
+            "sucesso": False,
+            "motivo": "Colaborador não localizado no período ativo.",
+        }
+
+    return cadastro.definir_cracha(
+        colaborador,
+        id_cracha,
+        periodo_id,
+        usuario=usuario,
+    )
+
+
+def completar_cracha_pelo_cadastro(colaborador):
+    """Se a lista do período está sem crachá, mas o cadastro permanente já
+    tem, copia o crachá para o período e devolve o colaborador atualizado.
+    Assim o terminal só pede o crachá a quem realmente nunca cadastrou."""
+    if colaborador.get("id_mat") is not None:
+        return colaborador
+
+    try:
+        permanente = cadastro.buscar_por_matricula(colaborador.get("matricula"))
+    except Exception:
+        return colaborador
+
+    if not permanente or permanente.get("id_cracha") is None:
+        return colaborador
+
+    periodo_id = colaborador.get("periodo_id") or obter_periodo_ativo_id()
+
+    resultado = cadastro.definir_cracha(
+        colaborador,
+        permanente["id_cracha"],
+        periodo_id,
+        usuario="cadastro",
+    )
+
+    if resultado.get("sucesso"):
+        atualizado = dict(colaborador)
+        atualizado["id_mat"] = int(permanente["id_cracha"])
+        return atualizado
+
+    return colaborador
+
+
+def _identificar_pelo_cadastro(valor):
+    """Crachá que está no cadastro permanente, mas ainda não na lista do
+    período: localiza a matrícula e sincroniza o período."""
+    try:
+        permanente = cadastro.buscar_por_cracha(valor)
+    except Exception:
+        return None
+
+    if not permanente:
+        return None
+
+    colaborador = buscar_por_matricula(permanente.get("matricula"))
+
+    if not colaborador:
+        return None
+
+    colaborador = completar_cracha_pelo_cadastro(colaborador)
+
     return {
-        "sucesso": True,
-        "motivo": "Crachá cadastrado com sucesso.",
+        "tipo": "COLABORADOR",
+        "identificacao": "ID CRACHÁ",
+        "dados": colaborador,
     }
 
 
@@ -354,17 +397,24 @@ def identificar(identificacao):
             "resultado": "Identificação vazia.",
         }
 
+    resultado = None
+
     try:
         resultado = _identificar_rpc(
             valor
         )
-
-        if resultado:
-            return resultado
-
     except Exception:
-        pass
+        resultado = None
 
-    return _identificar_fallback(
-        valor
-    )
+    if not resultado:
+        resultado = _identificar_fallback(
+            valor
+        )
+
+    if resultado.get("tipo") == "NAO_ENCONTRADO":
+        pelo_cadastro = _identificar_pelo_cadastro(valor)
+
+        if pelo_cadastro:
+            return pelo_cadastro
+
+    return resultado

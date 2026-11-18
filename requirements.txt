@@ -1,4 +1,9 @@
-streamlit
-pandas
-openpyxl
-supabase
+# Faixas de versão: evitam que uma atualização grande (ex.: Streamlit 2.0)
+# quebre o app sozinho num reinício do Streamlit Cloud.
+# Para fixar versões exatas, copie as versões instaladas que aparecem
+# nos logs do app (Manage app → logs) e use "==".
+streamlit>=1.36,<2.0
+pandas>=2.2,<4.0
+openpyxl>=3.1,<4.0
+supabase>=2.0,<3.0
+tzdata>=2024.1

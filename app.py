@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from database.database import (
     inicializar_banco,
@@ -25,9 +26,16 @@ from database.database import (
     finalizar_entrega,
     reabrir_entrega,
     iniciar_nova_entrega,
+    registrar_historico,
 )
 from services.importador import importar_excel
-from services.identificacao import identificar, cadastrar_cracha, buscar_por_matricula
+from services.identificacao import (
+    identificar,
+    cadastrar_cracha,
+    buscar_por_matricula,
+    completar_cracha_pelo_cadastro,
+)
+from services import cadastro
 from services.audio_manager import (
     TIPOS_AUDIO,
     obter_audio_evento,
@@ -186,8 +194,17 @@ def render_preview_audio(dados, mime_type="audio/mpeg"):
 # BANCO
 # ============================================================
 
-inicializar_banco()
-inicializar_usuarios()
+@st.cache_resource(show_spinner=False)
+def inicializar_uma_vez():
+    """Antes rodava a cada clique/leitura (várias consultas ao Supabase).
+    Agora roda uma vez por inicialização do servidor. Se falhar, tenta de
+    novo na próxima interação (o Streamlit não guarda exceções no cache)."""
+    inicializar_banco()
+    inicializar_usuarios()
+    return True
+
+
+inicializar_uma_vez()
 
 
 # ============================================================
@@ -212,6 +229,10 @@ valores_iniciais = {
     "aguardando_cracha": False,
     "colaborador_cracha_id": None,
     "matricula_cracha": None,
+    # "CADASTRO" = primeira vez (cadastra e libera a cesta)
+    # "ATUALIZAR" = troca de crachá pelo botão (não libera cesta)
+    "modo_cracha": None,
+    "dados_cracha": None,
     "ultimo_audio_operacao": None,
     "ultima_frase_audio": "",
 }
@@ -538,7 +559,61 @@ def preencher_dados_colaborador(resultado_liberacao, colaborador):
     resultado_liberacao["nome"] = colaborador["nome"]
     resultado_liberacao["matricula"] = colaborador["matricula"]
     resultado_liberacao["setor"] = colaborador["setor"]
+    # Usados pelo botão "Atualizar crachá".
+    resultado_liberacao["colaborador_id"] = colaborador.get("id")
+    resultado_liberacao["id_mat"] = colaborador.get("id_mat")
     return resultado_liberacao
+
+
+def limpar_modo_cracha():
+    st.session_state.aguardando_cracha = False
+    st.session_state.colaborador_cracha_id = None
+    st.session_state.matricula_cracha = None
+    st.session_state.modo_cracha = None
+    st.session_state.dados_cracha = None
+
+
+def iniciar_atualizacao_cracha(dados):
+    """Botão "Atualizar crachá": o próximo crachá lido substitui o atual."""
+    st.session_state.aguardando_cracha = True
+    st.session_state.modo_cracha = "ATUALIZAR"
+    st.session_state.colaborador_cracha_id = dados.get("colaborador_id")
+    st.session_state.matricula_cracha = dados.get("matricula")
+    st.session_state.dados_cracha = {
+        "nome": dados.get("nome"),
+        "matricula": dados.get("matricula"),
+        "setor": dados.get("setor"),
+        "id_mat": dados.get("id_mat"),
+    }
+    st.session_state.resultado_liberacao = None
+    st.session_state.identificacao = ""
+
+
+def cancelar_cadastro_cracha():
+    limpar_modo_cracha()
+    st.session_state.resultado_liberacao = None
+    st.session_state.identificacao = ""
+
+
+def registrar_evento_cracha(resultado_cadastro, dados, modo):
+    """Deixa a troca/cadastro de crachá registrada no Histórico."""
+    try:
+        anterior = resultado_cadastro.get("id_cracha_anterior")
+        registrar_historico(
+            tipo_identificacao="ID CRACHÁ",
+            id_cracha=resultado_cadastro.get("id_cracha"),
+            matricula=dados.get("matricula"),
+            nome=dados.get("nome"),
+            setor=dados.get("setor"),
+            resultado=(
+                "CRACHA_ATUALIZADO" if modo == "ATUALIZAR" else "CRACHA_CADASTRADO"
+            ),
+            motivo=(
+                f"Crachá anterior: {anterior}. " if anterior else ""
+            ) + f"Usuário: {st.session_state.usuario or '-'}",
+        )
+    except Exception:
+        pass
 
 
 def obter_motivo_perda(colaborador):
@@ -574,9 +649,7 @@ def processar_colaborador(colaborador, tipo_identificacao, cracha_cadastrado=Fal
         resultado_liberacao["motivo"] = perde
 
         st.session_state.resultado_liberacao = resultado_liberacao
-        st.session_state.aguardando_cracha = False
-        st.session_state.colaborador_cracha_id = None
-        st.session_state.matricula_cracha = None
+        limpar_modo_cracha()
         st.session_state.limpar_entrada = True
         return True
 
@@ -623,20 +696,43 @@ def processar_identificacao():
     # ========================================================
     if st.session_state.aguardando_cracha:
         colaborador_id = st.session_state.colaborador_cracha_id
-        cadastro = cadastrar_cracha(colaborador_id, valor)
+        modo = st.session_state.modo_cracha or "CADASTRO"
+        dados_cracha = dict(st.session_state.dados_cracha or {})
 
-        if not cadastro["sucesso"]:
+        resultado_cadastro = cadastrar_cracha(
+            colaborador_id,
+            valor,
+            usuario=st.session_state.usuario,
+        )
+
+        if not resultado_cadastro["sucesso"]:
+            # Continua aguardando: o operador pode tentar outro crachá
+            # ou clicar em Cancelar.
             st.session_state.resultado_liberacao = {
                 "sucesso": False,
                 "resultado": "ERRO_CRACHA",
-                "motivo": cadastro["motivo"],
+                "motivo": resultado_cadastro["motivo"],
             }
             st.session_state.limpar_entrada = True
             return
 
-        st.session_state.aguardando_cracha = False
-        st.session_state.colaborador_cracha_id = None
-        st.session_state.matricula_cracha = None
+        registrar_evento_cracha(resultado_cadastro, dados_cracha, modo)
+        limpar_modo_cracha()
+
+        if modo == "ATUALIZAR":
+            # Troca de crachá: só atualiza o cadastro, não libera cesta.
+            st.session_state.resultado_liberacao = {
+                "sucesso": False,
+                "resultado": "CRACHA_ATUALIZADO",
+                "nome": dados_cracha.get("nome"),
+                "matricula": dados_cracha.get("matricula"),
+                "setor": dados_cracha.get("setor"),
+                "colaborador_id": colaborador_id,
+                "id_mat": resultado_cadastro.get("id_cracha"),
+                "id_anterior": resultado_cadastro.get("id_cracha_anterior"),
+            }
+            st.session_state.limpar_entrada = True
+            return
 
         resultado = identificar(valor)
         if resultado["tipo"] != "COLABORADOR":
@@ -688,22 +784,32 @@ def processar_identificacao():
             resultado_liberacao["motivo"] = perde
 
             st.session_state.resultado_liberacao = resultado_liberacao
-            st.session_state.aguardando_cracha = False
-            st.session_state.colaborador_cracha_id = None
-            st.session_state.matricula_cracha = None
+            limpar_modo_cracha()
             st.session_state.limpar_entrada = True
             return
 
         # ----------------------------------------------------
         # 2º: MATRÍCULA SEM CRACHÁ -> SOLICITAR CADASTRO
         # ----------------------------------------------------
+        # Se o cadastro permanente já tem o crachá, copia para o período
+        # e segue sem pedir de novo.
+        if resultado["identificacao"] == "MATRÍCULA":
+            colaborador = completar_cracha_pelo_cadastro(colaborador)
+
         if (
             resultado["identificacao"] == "MATRÍCULA"
-            and colaborador["id_mat"] is None
+            and colaborador.get("id_mat") is None
         ):
             st.session_state.aguardando_cracha = True
+            st.session_state.modo_cracha = "CADASTRO"
             st.session_state.colaborador_cracha_id = colaborador["id"]
             st.session_state.matricula_cracha = colaborador["matricula"]
+            st.session_state.dados_cracha = {
+                "nome": colaborador["nome"],
+                "matricula": colaborador["matricula"],
+                "setor": colaborador["setor"],
+                "id_mat": None,
+            }
             st.session_state.resultado_liberacao = {
                 "sucesso": False,
                 "resultado": "AGUARDANDO_CRACHA",
@@ -785,6 +891,7 @@ with st.sidebar:
             "Dashboard",
             "Histórico",
             "Períodos",
+            "Colaboradores",
             "Áudios",
             "Estoque",
             "Importação",
@@ -828,9 +935,7 @@ with st.sidebar:
         st.session_state.identificacao = ""
         st.session_state.resultado_liberacao = None
         st.session_state.resultado_consulta = None
-        st.session_state.aguardando_cracha = False
-        st.session_state.colaborador_cracha_id = None
-        st.session_state.matricula_cracha = None
+        limpar_modo_cracha()
         st.rerun()
 
 
@@ -871,8 +976,14 @@ def tela_consulta():
         f"• Status: **{str(periodo.get('status') or '-').upper()}**"
     )
 
+    registros = obter_consulta_retiradas(
+        situacao="TODOS",
+        periodo_id=periodo_id,
+    )
+
     resumo = obter_resumo_consulta(
         periodo_id=periodo_id,
+        registros=registros,
     )
 
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -891,11 +1002,6 @@ def tela_consulta():
 
     with col5:
         st.metric("⚪ Sem direito", resumo.get("sem_direito", 0))
-
-    registros = obter_consulta_retiradas(
-        situacao="TODOS",
-        periodo_id=periodo_id,
-    )
 
     st.divider()
     st.subheader("🔍 Consultar colaborador")
@@ -1151,20 +1257,37 @@ def tela_terminal():
         )
 
     if st.session_state.aguardando_cracha:
-        resultado_atual = st.session_state.resultado_liberacao or {}
+        dados_atual = (
+            st.session_state.dados_cracha
+            or st.session_state.resultado_liberacao
+            or {}
+        )
+        atualizando = st.session_state.modo_cracha == "ATUALIZAR"
+        titulo_modo = (
+            "🔄 ATUALIZAÇÃO DO CRACHÁ"
+            if atualizando
+            else "🟡 CADASTRO DE CRACHÁ NECESSÁRIO"
+        )
+        cracha_atual = texto_campo(dados_atual.get("id_mat"))
+        detalhe_cracha = (
+            f"&nbsp; • &nbsp; 🪪 Crachá atual: <strong>{valor_seguro(cracha_atual)}</strong>"
+            if atualizando and cracha_atual
+            else ""
+        )
         render_html(
-            """
-            <div class="aguardando-card">🟡 CADASTRO DE CRACHÁ NECESSÁRIO</div>
+            f"""
+            <div class="aguardando-card">{titulo_modo}</div>
             """
         )
         render_html(
             f"""
             <div class="dados-card">
-                👤 <strong>{valor_seguro(resultado_atual.get('nome', ''))}</strong>
+                👤 <strong>{valor_seguro(dados_atual.get('nome', ''))}</strong>
                 &nbsp; • &nbsp;
-                🆔 Matrícula: <strong>{valor_seguro(resultado_atual.get('matricula', ''))}</strong>
+                🆔 Matrícula: <strong>{valor_seguro(dados_atual.get('matricula', ''))}</strong>
+                {detalhe_cracha}
                 &nbsp; • &nbsp;
-                🪪 Aproxime o novo crachá
+                🪪 Aproxime o novo crachá do leitor
             </div>
             """
         )
@@ -1202,6 +1325,14 @@ def tela_terminal():
             <div class="aguardando-card">🪪 AGUARDANDO LEITURA DO NOVO CRACHÁ</div>
             """
         )
+        _, col_cancelar, _ = st.columns([2, 1, 2])
+        with col_cancelar:
+            st.button(
+                "✖️ Cancelar",
+                key="cancelar_cadastro_cracha",
+                on_click=cancelar_cadastro_cracha,
+                use_container_width=True,
+            )
     else:
         render_html(
             """
@@ -1209,11 +1340,99 @@ def tela_terminal():
             """
         )
 
+    focar_campo_leitura()
+
     resultado = st.session_state.resultado_liberacao
     if not resultado:
         return
 
+    render_resultado_terminal(resultado)
+
+    # Pequeno botão em toda leitura de colaborador para trocar o crachá.
+    if (
+        resultado.get("colaborador_id") is not None
+        and not st.session_state.aguardando_cracha
+        and not entrega_finalizada
+    ):
+        _, col_botao = st.columns([4, 1])
+        with col_botao:
+            st.button(
+                "🪪 Atualizar crachá",
+                key=(
+                    "atualizar_cracha_"
+                    f"{resultado.get('colaborador_id')}_"
+                    f"{st.session_state.ultimo_timestamp}"
+                ),
+                on_click=iniciar_atualizacao_cracha,
+                args=(dict(resultado),),
+                help="Cadastrar um novo crachá para este colaborador.",
+                use_container_width=True,
+            )
+
+
+def focar_campo_leitura():
+    """Coloca o cursor no campo de leitura para o leitor de crachá
+    funcionar sem precisar clicar (ex.: depois de usar um botão)."""
+    marcador = (
+        f"{st.session_state.ultimo_timestamp}-"
+        f"{st.session_state.aguardando_cracha}-"
+        f"{st.session_state.modo_cracha}"
+    )
+    components.html(
+        f"""
+        <script>
+        // {marcador}
+        (function () {{
+            try {{
+                const doc = window.parent.document;
+                const focar = () => {{
+                    // No Terminal existe um único campo de texto: o de leitura.
+                    const campo = doc.querySelector(
+                        'div[data-testid="stTextInput"] input:not([disabled])'
+                    );
+                    const ativo = doc.activeElement;
+                    const digitando = ativo && (
+                        ["TEXTAREA", "SELECT"].includes(ativo.tagName)
+                        || (ativo.tagName === "INPUT"
+                            && !["radio", "checkbox", "button"].includes(ativo.type))
+                    );
+                    if (campo && !digitando) {{ campo.focus(); }}
+                }};
+                setTimeout(focar, 150);
+                setTimeout(focar, 700);
+            }} catch (e) {{}}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def render_resultado_terminal(resultado):
     status_resultado = resultado.get("resultado", "")
+
+    if status_resultado == "CRACHA_ATUALIZADO":
+        render_html(
+            """
+            <div class="status status-verde">🪪 CRACHÁ ATUALIZADO</div>
+            """
+        )
+        anterior = texto_campo(resultado.get("id_anterior"))
+        render_html(
+            f"""
+            <div class="nome-card">👤 {valor_seguro(resultado.get('nome', ''))}</div>
+            <div class="dados-card">
+                🆔 Matrícula: <strong>{valor_seguro(resultado.get('matricula', ''))}</strong>
+                &nbsp; • &nbsp;
+                🪪 Novo crachá: <strong>{valor_seguro(resultado.get('id_mat', ''))}</strong>
+                {f"&nbsp; • &nbsp; Anterior: <strong>{valor_seguro(anterior)}</strong>" if anterior else ""}
+            </div>
+            """
+        )
+        st.success(
+            "Crachá salvo no cadastro do colaborador. Nenhuma cesta foi liberada."
+        )
+        return
 
     if status_resultado not in {"", "AGUARDANDO_CRACHA"}:
         tocar_audio_resultado(resultado)
@@ -2066,7 +2285,8 @@ def tela_importacao():
     ):
         with st.spinner("Processando planilha..."):
             resultado = importar_excel(
-                arquivo
+                arquivo,
+                usuario=st.session_state.usuario,
             )
 
         if resultado["erros"]:
@@ -2090,6 +2310,21 @@ def tela_importacao():
                     "Demitidos",
                     resultado["demitidos"],
                 )
+
+            if resultado.get("crachas_do_cadastro"):
+                st.info(
+                    f"🪪 {resultado['crachas_do_cadastro']} crachá(s) "
+                    "preenchido(s) a partir do cadastro permanente."
+                )
+
+            if resultado.get("retiradas_preservadas"):
+                st.info(
+                    f"🔒 {resultado['retiradas_preservadas']} retirada(s) já "
+                    "registrada(s) foram mantidas (a planilha não as apagou)."
+                )
+
+        for aviso in resultado.get("avisos", []):
+            st.warning(aviso)
 
 
 # ============================================================
@@ -2310,6 +2545,176 @@ def tela_relatorios():
 
 
 # ============================================================
+# CADASTRO PERMANENTE DE COLABORADORES
+# ============================================================
+
+def tela_colaboradores():
+    st.title("🪪 Cadastro de colaboradores")
+    st.caption(
+        "Cadastro permanente: matrícula, nome, setor e ID do crachá. "
+        "Vale para todos os períodos. É atualizado pela importação da "
+        "planilha e sempre que um crachá é cadastrado no Terminal."
+    )
+
+    if not cadastro.cadastro_disponivel():
+        st.error(
+            "A tabela do cadastro ainda não existe no Supabase. Abra o "
+            "Supabase → SQL Editor e execute o arquivo "
+            "sql/001_cadastro_colaboradores.sql do GitHub."
+        )
+        if st.button("🔄 Verificar novamente"):
+            cadastro.cadastro_disponivel.clear()
+            st.rerun()
+        return
+
+    registros = cadastro.listar_cadastro()
+
+    total = len(registros)
+    com_cracha = sum(1 for r in registros if r.get("id_cracha") is not None)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("👥 Colaboradores", total)
+    with col2:
+        st.metric("🪪 Com crachá", com_cracha)
+    with col3:
+        st.metric("⚠️ Sem crachá", total - com_cracha)
+
+    st.divider()
+    st.subheader("✏️ Cadastrar ou trocar crachá manualmente")
+    st.caption(
+        "No Terminal, use o botão 🪪 Atualizar crachá. Aqui é para "
+        "ajustes do administrador (dá para usar o leitor no campo do crachá)."
+    )
+
+    with st.form("form_cracha_manual", clear_on_submit=True):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            matricula_manual = st.text_input("Matrícula", key="cad_matricula")
+        with col_b:
+            cracha_manual = st.text_input("ID do crachá", key="cad_cracha")
+        salvar = st.form_submit_button(
+            "💾 Salvar crachá", type="primary", use_container_width=True
+        )
+
+    if salvar:
+        try:
+            periodo = obter_periodo_ativo()
+            retorno = cadastro.definir_cracha_por_matricula(
+                matricula_manual,
+                cracha_manual,
+                periodo["id"],
+                usuario=st.session_state.usuario,
+            )
+            if retorno["sucesso"]:
+                registrar_historico(
+                    tipo_identificacao="SISTEMA",
+                    id_cracha=retorno.get("id_cracha"),
+                    matricula=texto_campo(matricula_manual),
+                    resultado="CRACHA_ATUALIZADO",
+                    motivo=(
+                        "Alterado na tela de cadastro. "
+                        f"Usuário: {st.session_state.usuario or '-'}"
+                    ),
+                )
+                st.success("Crachá salvo.")
+                st.rerun()
+            else:
+                st.error(retorno["motivo"])
+        except Exception as erro:
+            st.error(f"Não foi possível salvar: {erro}")
+
+    with st.expander("🗑️ Remover crachá (crachá perdido ou devolvido)"):
+        matricula_remover = st.text_input(
+            "Matrícula", key="cad_remover_matricula"
+        )
+        confirmar = st.checkbox(
+            "Confirmo que desejo remover o crachá desta matrícula.",
+            key="cad_remover_confirmar",
+        )
+        if st.button(
+            "Remover crachá",
+            disabled=not confirmar or not texto_campo(matricula_remover),
+            key="cad_remover_botao",
+        ):
+            try:
+                periodo = obter_periodo_ativo()
+                cadastro.remover_cracha(matricula_remover, periodo["id"])
+                st.success(
+                    "Crachá removido. Na próxima leitura pela matrícula, "
+                    "o Terminal pedirá o cadastro de um novo crachá."
+                )
+            except Exception as erro:
+                st.error(f"Não foi possível remover: {erro}")
+
+    st.divider()
+    st.subheader("📋 Colaboradores cadastrados")
+
+    if not registros:
+        st.info(
+            "Cadastro vazio. Importe a planilha do período para preenchê-lo."
+        )
+        return
+
+    df = pd.DataFrame(
+        [
+            {
+                "Matrícula": texto_campo(r.get("matricula")),
+                "Nome": texto_campo(r.get("nome")),
+                "Setor": texto_campo(r.get("setor")),
+                "ID Crachá": texto_campo(r.get("id_cracha")),
+                "Atualizado em": texto_campo(r.get("atualizado_em"))[:16].replace("T", " "),
+                "Atualizado por": texto_campo(r.get("atualizado_por")),
+            }
+            for r in registros
+        ]
+    )
+
+    filtro1, filtro2 = st.columns([2, 1])
+    with filtro1:
+        busca = st.text_input(
+            "Buscar",
+            placeholder="Nome, matrícula, setor ou crachá...",
+            key="cad_busca",
+        )
+    with filtro2:
+        situacao = st.selectbox(
+            "Crachá",
+            ["Todos", "Com crachá", "Sem crachá"],
+            key="cad_situacao",
+        )
+
+    if busca:
+        mascara = (
+            df[["Matrícula", "Nome", "Setor", "ID Crachá"]]
+            .astype(str)
+            .apply(
+                lambda coluna: coluna.str.contains(
+                    str(busca).strip(), case=False, na=False, regex=False
+                )
+            )
+            .any(axis=1)
+        )
+        df = df[mascara]
+
+    if situacao == "Com crachá":
+        df = df[df["ID Crachá"] != ""]
+    elif situacao == "Sem crachá":
+        df = df[df["ID Crachá"] == ""]
+
+    st.caption(f"{len(df)} colaborador(es).")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "⬇️ Exportar cadastro",
+        data=df.to_csv(index=False, encoding="utf-8-sig"),
+        file_name="cadastro_colaboradores.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
+# ============================================================
 # ROTEAMENTO
 # ============================================================
 
@@ -2325,6 +2730,8 @@ elif pagina == "Histórico" and eh_admin:
     tela_historico()
 elif pagina == "Períodos" and eh_admin:
     tela_periodos()
+elif pagina == "Colaboradores" and eh_admin:
+    tela_colaboradores()
 elif pagina == "Áudios" and eh_admin:
     tela_audios()
 elif pagina == "Estoque" and eh_admin:

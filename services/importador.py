@@ -1,6 +1,7 @@
 import pandas as pd
 
 from services.supabase_client import obter_supabase
+from services import cadastro
 from database.database import obter_periodo_ativo_id
 
 
@@ -318,7 +319,10 @@ def buscar_colaboradores_existentes_periodo(matriculas, periodo_id):
         resposta = (
             cliente
             .table("colaboradores")
-            .select("id,matricula,id_mat,periodo_id")
+            .select(
+                "id,matricula,id_mat,periodo_id,"
+                "confirmacao_retirada,data_hora_retirada"
+            )
             .eq("periodo_id", periodo_id)
             .in_("matricula", lote)
             .execute()
@@ -360,8 +364,16 @@ def buscar_crachas_periodos_anteriores(matriculas, periodo_id):
 # ============================================================
 
 def salvar_colaboradores(registros, periodo_id):
+    """Grava a lista do período. Retorna um dicionário com os totais."""
+    info = {
+        "total": 0,
+        "retiradas_preservadas": 0,
+        "crachas_do_cadastro": 0,
+        "crachas_duplicados_removidos": [],
+    }
+
     if not registros:
-        return 0
+        return info
 
     cliente = obter_supabase()
 
@@ -380,7 +392,10 @@ def salvar_colaboradores(registros, periodo_id):
         periodo_id,
     )
 
+    cadastro_permanente = cadastro.mapa_por_matriculas(matriculas)
+
     payload = []
+    origem_cracha = {}
 
     for registro in registros:
         item = dict(registro)
@@ -393,18 +408,63 @@ def salvar_colaboradores(registros, periodo_id):
             matricula
         )
 
-        # Se a planilha veio sem ID Mat:
-        # 1. preserva o crachá já cadastrado no mesmo período;
-        # 2. se não existir no período, reaproveita o crachá do período anterior.
-        if item.get("id_mat") is None:
-            if existente and existente.get("id_mat") is not None:
-                item["id_mat"] = existente.get("id_mat")
-            elif matricula in crachas_anteriores:
-                item["id_mat"] = crachas_anteriores[matricula]
+        permanente = cadastro_permanente.get(matricula) or {}
+
+        # Prioridade do crachá:
+        # 1. cadastro permanente do app (atualizado pelo terminal);
+        # 2. crachá já gravado neste período;
+        # 3. coluna ID Mat da planilha;
+        # 4. crachá usado em período anterior.
+        if permanente.get("id_cracha") is not None:
+            item["id_mat"] = int(permanente["id_cracha"])
+            origem_cracha[matricula] = "CADASTRO"
+            info["crachas_do_cadastro"] += 1
+        elif existente and existente.get("id_mat") is not None:
+            item["id_mat"] = existente.get("id_mat")
+            origem_cracha[matricula] = "PERIODO"
+        elif item.get("id_mat") is not None:
+            origem_cracha[matricula] = "PLANILHA"
+        elif matricula in crachas_anteriores:
+            item["id_mat"] = crachas_anteriores[matricula]
+            origem_cracha[matricula] = "ANTERIOR"
+
+        # Proteção contra reimportação no meio da entrega: se o banco já
+        # registrou a retirada, a planilha nunca apaga essa informação.
+        # Sem isso, quem já retirou voltava a ficar PENDENTE.
+        if existente and normalizar_texto(
+            existente.get("confirmacao_retirada")
+        ):
+            item["confirmacao_retirada"] = existente.get("confirmacao_retirada")
+            item["data_hora_retirada"] = existente.get("data_hora_retirada")
+            info["retiradas_preservadas"] += 1
 
         payload.append(item)
 
-    total = 0
+    # Um mesmo crachá não pode ficar com duas pessoas no período.
+    # Fica com quem tem a origem mais confiável; os demais ficam sem crachá
+    # e o terminal pedirá o cadastro quando digitarem a matrícula.
+    prioridade = {"CADASTRO": 0, "PERIODO": 1, "PLANILHA": 2, "ANTERIOR": 3}
+    donos = {}
+
+    for item in payload:
+        id_mat = item.get("id_mat")
+        if id_mat is None:
+            continue
+        atual = donos.get(id_mat)
+        p_item = prioridade.get(origem_cracha.get(str(item["matricula"])), 9)
+        if atual is None or p_item < prioridade.get(
+            origem_cracha.get(str(atual["matricula"])), 9
+        ):
+            donos[id_mat] = item
+
+    for item in payload:
+        id_mat = item.get("id_mat")
+        if id_mat is not None and donos.get(id_mat) is not item:
+            info["crachas_duplicados_removidos"].append(
+                f"Crachá {id_mat} removido da matrícula {item['matricula']} "
+                f"(já pertence à matrícula {donos[id_mat]['matricula']})."
+            )
+            item["id_mat"] = None
 
     for lote in dividir_em_lotes(payload, 500):
         (
@@ -417,9 +477,9 @@ def salvar_colaboradores(registros, periodo_id):
             .execute()
         )
 
-        total += len(lote)
+        info["total"] += len(lote)
 
-    return total
+    return info
 
 
 def salvar_demitidos(registros):
@@ -449,11 +509,15 @@ def salvar_demitidos(registros):
 # IMPORTAÇÃO PRINCIPAL
 # ============================================================
 
-def importar_excel(caminho_arquivo):
+def importar_excel(caminho_arquivo, usuario=None):
     resultado = {
         "colaboradores": 0,
         "demitidos": 0,
         "erros": [],
+        "avisos": [],
+        "retiradas_preservadas": 0,
+        "crachas_do_cadastro": 0,
+        "cadastro_sincronizado": 0,
     }
 
     try:
@@ -537,10 +601,26 @@ def importar_excel(caminho_arquivo):
             periodo_id,
         )
 
-        resultado["colaboradores"] = salvar_colaboradores(
+        # Atualiza o cadastro permanente (nome/setor e crachás novos).
+        try:
+            resultado["cadastro_sincronizado"] = cadastro.sincronizar_da_planilha(
+                registros_colaboradores,
+                usuario=usuario,
+            )
+        except Exception as erro:
+            resultado["avisos"].append(
+                f"Cadastro permanente não foi atualizado: {erro}"
+            )
+
+        info = salvar_colaboradores(
             registros_colaboradores,
             periodo_id,
         )
+
+        resultado["colaboradores"] = info["total"]
+        resultado["retiradas_preservadas"] = info["retiradas_preservadas"]
+        resultado["crachas_do_cadastro"] = info["crachas_do_cadastro"]
+        resultado["avisos"].extend(info["crachas_duplicados_removidos"])
 
         resultado["demitidos"] = salvar_demitidos(
             registros_demitidos
