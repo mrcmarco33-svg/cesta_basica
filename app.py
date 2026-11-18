@@ -248,6 +248,29 @@ for chave, valor in valores_iniciais.items():
 # LOGIN
 # ============================================================
 
+ICONES_PAGINAS = {
+    "Terminal": "🪪",
+    "Consulta": "🔎",
+    "Dashboard": "📊",
+    "Relatórios": "📑",
+    "Histórico": "📜",
+    "Colaboradores": "👥",
+    "Períodos": "📅",
+    "Estoque": "📦",
+    "Importação": "📥",
+    "Usuários": "🔐",
+    "Áudios": "🔊",
+}
+
+
+def ir_para_pagina(nome_pagina):
+    st.session_state.pagina = nome_pagina
+
+
+def mudar_tema(tema):
+    st.session_state.tema = tema
+
+
 def sair():
     st.session_state.logado = False
     st.session_state.usuario_id = None
@@ -395,6 +418,8 @@ if st.session_state.tema == "Claro":
         "laranja_borda": "#DC8A00",
         "laranja_texto": "#7A3E00",
         "azul_borda": "#1D4ED8",
+        "azul_fundo": "#EAF1FF",
+        "azul_texto": "#1E3A8A",
         "cinza_fundo": "#EEF1F5",
         "cinza_borda": "#667085",
         "cinza_texto": "#1D2939",
@@ -419,6 +444,8 @@ else:
         "laranja_borda": "#FDB022",
         "laranja_texto": "#FEC84B",
         "azul_borda": "#53B1FD",
+        "azul_fundo": "#102A4C",
+        "azul_texto": "#B2D4FF",
         "cinza_fundo": "#29364A",
         "cinza_borda": "#8291A8",
         "cinza_texto": "#E2E8F0",
@@ -694,6 +721,86 @@ render_html(
         color: {CORES['texto']} !important;
     }}
     hr {{ border-color: {CORES['borda']} !important; }}
+
+    /* ===== Avisos (st.info / st.success / st.warning / st.error) =====
+       Fundo e texto definidos pelo tema do app; antes o fundo vinha do
+       tema base claro e, no Escuro, o texto claro ficava ilegível. */
+    div[data-testid="stAlert"], div[data-testid="stAlert"] > div,
+    div[data-testid="stAlert"] div[role="alert"], div[data-baseweb="notification"] {{
+        background-color: {CORES['azul_fundo']} !important;
+        color: {CORES['azul_texto']} !important;
+        border-radius: 10px !important;
+    }}
+    div[data-testid="stAlert"] {{
+        border: 1.5px solid {CORES['azul_borda']} !important;
+        border-radius: 10px !important;
+    }}
+    div[data-testid="stAlert"] *, div[data-baseweb="notification"] * {{
+        color: inherit !important;
+    }}
+    div[data-testid="stAlert"]:has([data-testid="stAlertContentSuccess"]),
+    div[data-testid="stAlert"]:has([data-testid="stAlertContentSuccess"]) > div,
+    div[data-testid="stAlert"]:has([data-testid="stAlertContentSuccess"]) div[role="alert"] {{
+        background-color: {CORES['verde_fundo']} !important;
+        color: {CORES['verde_texto']} !important;
+        border-color: {CORES['verde_borda']} !important;
+    }}
+    div[data-testid="stAlert"]:has([data-testid="stAlertContentWarning"]),
+    div[data-testid="stAlert"]:has([data-testid="stAlertContentWarning"]) > div,
+    div[data-testid="stAlert"]:has([data-testid="stAlertContentWarning"]) div[role="alert"] {{
+        background-color: {CORES['laranja_fundo']} !important;
+        color: {CORES['laranja_texto']} !important;
+        border-color: {CORES['laranja_borda']} !important;
+    }}
+    div[data-testid="stAlert"]:has([data-testid="stAlertContentError"]),
+    div[data-testid="stAlert"]:has([data-testid="stAlertContentError"]) > div,
+    div[data-testid="stAlert"]:has([data-testid="stAlertContentError"]) div[role="alert"] {{
+        background-color: {CORES['vermelho_fundo']} !important;
+        color: {CORES['vermelho_texto']} !important;
+        border-color: {CORES['vermelho_borda']} !important;
+    }}
+
+    /* ===== Menu lateral em botões ===== */
+    .menu-grupo {{
+        color: {CORES['secundario']};
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+        margin: 10px 0 4px 2px;
+    }}
+    section[data-testid="stSidebar"] .stButton button {{
+        justify-content: flex-start !important;
+        text-align: left !important;
+        padding: 8px 14px !important;
+        min-height: 42px !important;
+        border-radius: 10px !important;
+        font-size: 15px !important;
+        transition: background-color .15s, border-color .15s;
+    }}
+    section[data-testid="stSidebar"] .stButton button > div,
+    section[data-testid="stSidebar"] .stButton button p {{
+        justify-content: flex-start !important;
+        text-align: left !important;
+        width: 100%;
+    }}
+    section[data-testid="stSidebar"] .stButton button[kind="secondary"],
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {{
+        background-color: transparent !important;
+        border: 1px solid transparent !important;
+    }}
+    section[data-testid="stSidebar"] .stButton button[kind="secondary"]:hover,
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:hover {{
+        background-color: {CORES['selecao']} !important;
+        border-color: {CORES['borda']} !important;
+        color: {CORES['texto']} !important;
+    }}
+    section[data-testid="stSidebar"] .stButton button[kind="primary"],
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {{
+        font-weight: 800 !important;
+        box-shadow: 0 2px 6px rgba(16, 24, 40, .18);
+    }}
+    section[data-testid="stSidebar"] .stButton {{ margin-bottom: -6px; }}
 
     .rodape {{
         text-align: center; color: {CORES['secundario']}; font-size: 9px; margin-top: 5px;
@@ -1043,48 +1150,63 @@ with st.sidebar:
 
     st.divider()
 
-    paginas = (
-        [
-            "Terminal",
-            "Consulta",
-            "Dashboard",
-            "Histórico",
-            "Períodos",
-            "Colaboradores",
-            "Áudios",
-            "Estoque",
-            "Importação",
-            "Usuários",
-            "Relatórios",
+    grupos_menu = [
+        ("Operação", ["Terminal", "Consulta", "Dashboard"]),
+    ]
+
+    if eh_admin:
+        grupos_menu += [
+            ("Gestão", ["Relatórios", "Histórico", "Colaboradores", "Períodos"]),
+            ("Configurações", ["Estoque", "Importação", "Usuários", "Áudios"]),
         ]
-        if eh_admin
-        else ["Terminal", "Consulta", "Dashboard"]
-    )
+
+    paginas = [pagina for _, lista in grupos_menu for pagina in lista]
 
     if st.session_state.pagina not in paginas:
         st.session_state.pagina = "Terminal"
 
-    # O menu fica ligado direto ao session_state pela key.
-    # Antes, o "index" mudava a cada troca de aba, o Streamlit recriava o
-    # componente e era preciso clicar duas vezes para abrir a aba.
-    st.radio(
-        "Menu",
-        paginas,
-        key="pagina",
-    )
+    # Menu em botões. O clique troca a aba por callback (antes da tela ser
+    # desenhada), então abre na primeira vez. A aba atual fica destacada.
+    for titulo_grupo, lista in grupos_menu:
+        render_html(f'<div class="menu-grupo">{titulo_grupo}</div>')
+        for nome_pagina in lista:
+            st.button(
+                f"{ICONES_PAGINAS.get(nome_pagina, '•')}  {nome_pagina}",
+                key=f"menu_{nome_pagina}",
+                type="primary" if st.session_state.pagina == nome_pagina else "secondary",
+                use_container_width=True,
+                on_click=ir_para_pagina,
+                args=(nome_pagina,),
+            )
 
     st.divider()
 
-    st.radio(
-        "🎨 Tema",
-        ["Claro", "Escuro"],
-        key="tema",
-    )
+    render_html('<div class="menu-grupo">Tema</div>')
+    col_claro, col_escuro = st.columns(2)
+    with col_claro:
+        st.button(
+            "☀️ Claro",
+            key="tema_claro",
+            type="primary" if st.session_state.tema == "Claro" else "secondary",
+            use_container_width=True,
+            on_click=mudar_tema,
+            args=("Claro",),
+        )
+    with col_escuro:
+        st.button(
+            "🌙 Escuro",
+            key="tema_escuro",
+            type="primary" if st.session_state.tema == "Escuro" else "secondary",
+            use_container_width=True,
+            on_click=mudar_tema,
+            args=("Escuro",),
+        )
 
     st.divider()
 
     st.button(
         "🚪 Sair",
+        key="menu_sair",
         use_container_width=True,
         on_click=sair,
     )
