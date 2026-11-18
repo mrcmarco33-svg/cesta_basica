@@ -1,0 +1,9 @@
+# Tema base do app. Sem isto, o Streamlit segue o modo escuro do
+# computador/navegador e tabelas e caixas de seleção ficavam escuras
+# mesmo com o tema "Claro" escolhido no app.
+[theme]
+base = "light"
+primaryColor = "#1D4ED8"
+backgroundColor = "#F4F6FA"
+secondaryBackgroundColor = "#EEF1F5"
+textColor = "#101828"

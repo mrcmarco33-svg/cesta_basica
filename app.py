@@ -248,6 +248,19 @@ for chave, valor in valores_iniciais.items():
 # LOGIN
 # ============================================================
 
+def sair():
+    st.session_state.logado = False
+    st.session_state.usuario_id = None
+    st.session_state.usuario = None
+    st.session_state.nome_usuario = None
+    st.session_state.perfil = None
+    st.session_state.pagina = "Terminal"
+    st.session_state.identificacao = ""
+    st.session_state.resultado_liberacao = None
+    st.session_state.resultado_consulta = None
+    limpar_modo_cracha()
+
+
 def tela_login():
     render_html(
         """
@@ -364,24 +377,30 @@ if st.session_state.limpar_entrada:
 
 if st.session_state.tema == "Claro":
     CORES = {
-        "fundo": "#F6F8FB",
+        # Tema claro revisado para contraste (texto sempre bem mais escuro
+        # que o fundo; nada de cinza claro sobre branco).
+        "fundo": "#F4F6FA",
         "card": "#FFFFFF",
-        "texto": "#172033",
-        "secundario": "#667085",
-        "borda": "#D8DEE9",
-        "verde_fundo": "#EAFBF2",
-        "verde_borda": "#16A66A",
-        "verde_texto": "#057647",
-        "vermelho_fundo": "#FFF0EF",
-        "vermelho_borda": "#E5484D",
-        "vermelho_texto": "#B42318",
-        "laranja_fundo": "#FFF7E6",
-        "laranja_borda": "#F59E0B",
-        "laranja_texto": "#A15C00",
-        "azul_borda": "#2E90FA",
-        "cinza_fundo": "#F2F4F7",
-        "cinza_borda": "#98A2B3",
-        "cinza_texto": "#344054",
+        "campo": "#FFFFFF",
+        "texto": "#101828",
+        "secundario": "#475467",
+        "borda": "#7D8A9E",
+        "verde_fundo": "#E7F8EF",
+        "verde_borda": "#12915C",
+        "verde_texto": "#05603A",
+        "vermelho_fundo": "#FEEEEC",
+        "vermelho_borda": "#D92D20",
+        "vermelho_texto": "#912018",
+        "laranja_fundo": "#FFF4E0",
+        "laranja_borda": "#DC8A00",
+        "laranja_texto": "#7A3E00",
+        "azul_borda": "#1D4ED8",
+        "cinza_fundo": "#EEF1F5",
+        "cinza_borda": "#667085",
+        "cinza_texto": "#1D2939",
+        "primaria": "#1D4ED8",
+        "primaria_texto": "#FFFFFF",
+        "selecao": "#E0E9FF",
     }
 else:
     CORES = {
@@ -401,8 +420,12 @@ else:
         "laranja_texto": "#FEC84B",
         "azul_borda": "#53B1FD",
         "cinza_fundo": "#29364A",
-        "cinza_borda": "#667085",
+        "cinza_borda": "#8291A8",
         "cinza_texto": "#E2E8F0",
+        "campo": "#111C30",
+        "primaria": "#3B82F6",
+        "primaria_texto": "#FFFFFF",
+        "selecao": "#25395C",
     }
 
 
@@ -544,6 +567,133 @@ render_html(
         height: 1px !important;
         width: 1px !important;
     }}
+
+    /* ===== Componentes do Streamlit seguindo o tema escolhido ===== */
+    div[data-testid="stCaptionContainer"], div[data-testid="stCaptionContainer"] *,
+    .stCaption, small {{
+        color: {CORES['secundario']} !important;
+    }}
+    div[data-testid="stMetricLabel"], div[data-testid="stMetricLabel"] * {{
+        color: {CORES['secundario']} !important;
+        font-weight: 700 !important;
+    }}
+    div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] * {{
+        color: {CORES['texto']} !important;
+    }}
+    div[data-testid="stWidgetLabel"], div[data-testid="stWidgetLabel"] * {{
+        color: {CORES['texto']} !important;
+        font-weight: 600;
+    }}
+
+    /* Caixas de seleção (selectbox) e listas abertas */
+    div[data-baseweb="select"] > div {{
+        background-color: {CORES['campo']} !important;
+        border: 1.5px solid {CORES['borda']} !important;
+        color: {CORES['texto']} !important;
+    }}
+    div[data-baseweb="select"] *, div[data-baseweb="select"] input {{
+        color: {CORES['texto']} !important;
+    }}
+    div[data-baseweb="select"] svg {{ fill: {CORES['texto']} !important; }}
+    div[data-baseweb="popover"] ul, div[data-baseweb="popover"] li,
+    div[data-baseweb="popover"] div[role="listbox"], div[data-baseweb="menu"] {{
+        background-color: {CORES['card']} !important;
+        color: {CORES['texto']} !important;
+    }}
+    div[data-baseweb="popover"] li:hover, div[data-baseweb="popover"] li[aria-selected="true"] {{
+        background-color: {CORES['selecao']} !important;
+    }}
+
+    /* Campos de texto longo e números */
+    div[data-testid="stTextArea"] textarea,
+    div[data-testid="stNumberInput"] input {{
+        background-color: {CORES['campo']} !important;
+        color: {CORES['texto']} !important;
+        border: 1.5px solid {CORES['borda']} !important;
+    }}
+    div[data-testid="stNumberInput"] button {{
+        background-color: {CORES['cinza_fundo']} !important;
+        color: {CORES['texto']} !important;
+    }}
+    div[data-baseweb="input"], div[data-baseweb="base-input"], div[data-baseweb="textarea"] {{
+        background-color: {CORES['campo']} !important;
+    }}
+    input::placeholder, textarea::placeholder {{
+        color: {CORES['secundario']} !important;
+        opacity: 1 !important;
+    }}
+
+    /* Botões */
+    button[kind="secondary"], button[kind="secondaryFormSubmit"],
+    button[data-testid="stBaseButton-secondary"], button[data-testid="baseButton-secondary"],
+    button[data-testid="stBaseButton-secondaryFormSubmit"],
+    div[data-testid="stDownloadButton"] button {{
+        background-color: {CORES['card']} !important;
+        color: {CORES['texto']} !important;
+        border: 1.5px solid {CORES['borda']} !important;
+    }}
+    button[kind="secondary"]:hover, button[kind="secondaryFormSubmit"]:hover,
+    div[data-testid="stDownloadButton"] button:hover {{
+        border-color: {CORES['azul_borda']} !important;
+        color: {CORES['azul_borda']} !important;
+    }}
+    button[kind="primary"], button[kind="primaryFormSubmit"],
+    button[data-testid="stBaseButton-primary"], button[data-testid="baseButton-primary"],
+    button[data-testid="stBaseButton-primaryFormSubmit"] {{
+        background-color: {CORES['primaria']} !important;
+        border: 1.5px solid {CORES['primaria']} !important;
+        color: {CORES['primaria_texto']} !important;
+    }}
+    button[kind="primary"] *, button[kind="primaryFormSubmit"] *,
+    button[data-testid="stBaseButton-primary"] *, button[data-testid="stBaseButton-primaryFormSubmit"] * {{
+        color: {CORES['primaria_texto']} !important;
+    }}
+    button:disabled {{ opacity: 0.55 !important; }}
+
+    /* Opções do menu (radio) e caixas de confirmação (checkbox) */
+    label[data-baseweb="radio"] > div:first-child {{
+        background-color: {CORES['campo']} !important;
+        border: 2px solid {CORES['cinza_borda']} !important;
+    }}
+    label[data-baseweb="radio"]:has(input:checked) > div:first-child {{
+        background-color: {CORES['primaria']} !important;
+        border-color: {CORES['primaria']} !important;
+    }}
+    label[data-baseweb="radio"] > div:first-child > div {{
+        background-color: {CORES['campo']} !important;
+    }}
+    label[data-baseweb="radio"]:has(input:checked) {{ font-weight: 800; }}
+    label[data-baseweb="checkbox"] > span:first-of-type {{
+        background-color: {CORES['campo']} !important;
+        border-color: {CORES['cinza_borda']} !important;
+    }}
+    label[data-baseweb="checkbox"]:has(input:checked) > span:first-of-type {{
+        background-color: {CORES['primaria']} !important;
+        border-color: {CORES['primaria']} !important;
+    }}
+
+    /* Expansores, upload de arquivos, tabelas e código */
+    div[data-testid="stExpander"] details {{
+        background-color: {CORES['card']} !important;
+        border: 1px solid {CORES['borda']} !important;
+    }}
+    div[data-testid="stExpander"] summary, div[data-testid="stExpander"] summary * {{
+        color: {CORES['texto']} !important;
+    }}
+    section[data-testid="stFileUploaderDropzone"] {{
+        background-color: {CORES['campo']} !important;
+        border: 2px dashed {CORES['borda']} !important;
+    }}
+    section[data-testid="stFileUploaderDropzone"] * {{ color: {CORES['texto']} !important; }}
+    div[data-testid="stDataFrame"] {{
+        border: 1px solid {CORES['borda']};
+        border-radius: 8px;
+    }}
+    code, pre {{
+        background-color: {CORES['cinza_fundo']} !important;
+        color: {CORES['texto']} !important;
+    }}
+    hr {{ border-color: {CORES['borda']} !important; }}
 
     .rodape {{
         text-align: center; color: {CORES['secundario']}; font-size: 9px; margin-top: 5px;
@@ -914,38 +1064,30 @@ with st.sidebar:
     if st.session_state.pagina not in paginas:
         st.session_state.pagina = "Terminal"
 
-    st.session_state.pagina = st.radio(
+    # O menu fica ligado direto ao session_state pela key.
+    # Antes, o "index" mudava a cada troca de aba, o Streamlit recriava o
+    # componente e era preciso clicar duas vezes para abrir a aba.
+    st.radio(
         "Menu",
         paginas,
-        index=paginas.index(st.session_state.pagina),
+        key="pagina",
     )
 
     st.divider()
 
-    novo_tema = st.radio(
+    st.radio(
         "🎨 Tema",
         ["Claro", "Escuro"],
-        index=0 if st.session_state.tema == "Claro" else 1,
+        key="tema",
     )
-
-    if novo_tema != st.session_state.tema:
-        st.session_state.tema = novo_tema
-        st.rerun()
 
     st.divider()
 
-    if st.button("🚪 Sair", use_container_width=True):
-        st.session_state.logado = False
-        st.session_state.usuario_id = None
-        st.session_state.usuario = None
-        st.session_state.nome_usuario = None
-        st.session_state.perfil = None
-        st.session_state.pagina = "Terminal"
-        st.session_state.identificacao = ""
-        st.session_state.resultado_liberacao = None
-        st.session_state.resultado_consulta = None
-        limpar_modo_cracha()
-        st.rerun()
+    st.button(
+        "🚪 Sair",
+        use_container_width=True,
+        on_click=sair,
+    )
 
 
 # ============================================================
@@ -2448,13 +2590,128 @@ def tela_usuarios():
 # RELATÓRIOS
 # ============================================================
 
+MOTIVO_ENTREGA_FINALIZADA = "Entrega finalizada"
+
+
+def _chave_matricula(valor):
+    """Compara matrículas como número (007682 == 7682)."""
+    numero = normalizar_numero_consulta(valor)
+    return numero if numero is not None else texto_campo(valor)
+
+
+def _colaboradores_por_periodo(periodo_ids):
+    mapa = {}
+    for periodo_id in periodo_ids:
+        if periodo_id is None:
+            continue
+        for colaborador in obter_colaboradores_periodo(periodo_id=periodo_id):
+            mapa[(periodo_id, _chave_matricula(colaborador.get("matricula")))] = colaborador
+    return mapa
+
+
+def montar_relatorio(registros, mapa_nomes_periodo, incluir_sem_leitura=False):
+    """Junta retiradas (LIBERADO) e leituras de quem perdeu a cesta (NEGADO).
+
+    - Cada pessoa aparece uma vez por período (a leitura mais recente).
+    - Bloqueios por "entrega finalizada" não são perda de cesta e ficam fora.
+    - Quem retirou com perda parcial é identificado pela coluna Perde.
+    """
+    periodo_ids = {r.get("periodo_id") for r in registros}
+    if incluir_sem_leitura:
+        periodo_ids |= set(mapa_nomes_periodo.keys())
+
+    colaboradores = _colaboradores_por_periodo(periodo_ids)
+
+    linhas = []
+    vistos_negado = set()
+    pessoas_com_leitura = set()
+
+    for registro in registros:  # já vem do mais recente para o mais antigo
+        resultado = registro.get("resultado")
+        periodo_id = registro.get("periodo_id")
+        chave = (periodo_id, _chave_matricula(registro.get("matricula")))
+        colaborador = colaboradores.get(chave) or {}
+        motivo = texto_campo(registro.get("motivo"))
+
+        if resultado == "LIBERADO":
+            motivo_parcial = perda_parcial(colaborador) if colaborador else ""
+            situacao = "RETIROU (PERDA PARCIAL)" if motivo_parcial else "RETIROU"
+            motivo = motivo_parcial or motivo
+
+        elif resultado == "NEGADO":
+            if motivo.startswith(MOTIVO_ENTREGA_FINALIZADA):
+                continue
+            if chave in vistos_negado:
+                continue
+            vistos_negado.add(chave)
+            situacao = "PERDEU A CESTA"
+            motivo = motivo or texto_campo(colaborador.get("perde"))
+
+        else:
+            continue
+
+        pessoas_com_leitura.add(chave)
+        linhas.append(
+            {
+                "Período": mapa_nomes_periodo.get(periodo_id, "LEGADO / SEM PERÍODO"),
+                "Data/Hora": registro.get("data_hora"),
+                "Matrícula": registro.get("matricula"),
+                "Crachá": registro.get("id_cracha"),
+                "Nome": registro.get("nome"),
+                "Setor": registro.get("setor"),
+                "Cesta Normal": int(registro.get("cesta_normal") or 0),
+                "Cesta Especial": int(registro.get("cesta_especial") or 0),
+                "Situação": situacao,
+                "Motivo": motivo,
+            }
+        )
+
+    # Quem perdeu a cesta pela planilha, mas nunca passou no terminal.
+    if incluir_sem_leitura:
+        for (periodo_id, chave_mat), colaborador in colaboradores.items():
+            if (periodo_id, chave_mat) in pessoas_com_leitura:
+                continue
+            if not perdeu_todas(colaborador):
+                continue
+            linhas.append(
+                {
+                    "Período": mapa_nomes_periodo.get(periodo_id, f"Período {periodo_id}"),
+                    "Data/Hora": "",
+                    "Matrícula": colaborador.get("matricula"),
+                    "Crachá": colaborador.get("id_mat"),
+                    "Nome": colaborador.get("nome"),
+                    "Setor": colaborador.get("setor"),
+                    "Cesta Normal": 0,
+                    "Cesta Especial": 0,
+                    "Situação": "PERDEU A CESTA (SEM LEITURA)",
+                    "Motivo": texto_campo(colaborador.get("perde")),
+                }
+            )
+
+    return pd.DataFrame(
+        linhas,
+        columns=[
+            "Período", "Data/Hora", "Matrícula", "Crachá", "Nome", "Setor",
+            "Cesta Normal", "Cesta Especial", "Situação", "Motivo",
+        ],
+    )
+
+
 def tela_relatorios():
     st.title("📑 Relatórios")
+    st.caption(
+        "Mostra quem retirou e também as leituras de quem perdeu a cesta. "
+        "Cada pessoa aparece uma vez por período."
+    )
 
     periodos = listar_periodos()
     mapa = {
         periodo["id"]: periodo
         for periodo in periodos
+    }
+    nomes_periodo = {
+        pid: (periodo.get("nome") or f"Período {pid}")
+        for pid, periodo in mapa.items()
     }
 
     opcoes = ["__TODOS__"]
@@ -2485,85 +2742,93 @@ def tela_relatorios():
 
     if selecao == "__TODOS__":
         registros = obter_historico_geral(
-            limite=20000,
+            limite=100000,
         )
         nome_arquivo = "todos_periodos"
+        periodos_relatorio = nomes_periodo
 
     elif selecao == "__LEGADO__":
         registros = obter_historico_legado(
-            limite=20000,
+            limite=100000,
         )
         nome_arquivo = "legado"
+        periodos_relatorio = {}
 
     else:
         registros = obter_historico(
-            limite=10000,
+            limite=100000,
             periodo_id=selecao,
         )
         nome_arquivo = str(
             mapa[selecao].get("nome") or selecao
         )
+        periodos_relatorio = {selecao: nomes_periodo[selecao]}
 
-    if not registros:
+    incluir_sem_leitura = st.checkbox(
+        "Incluir também quem perdeu a cesta e não passou no terminal",
+        value=False,
+        key="relatorio_incluir_sem_leitura",
+        disabled=selecao == "__LEGADO__",
+    )
+
+    with st.spinner("Montando relatório..."):
+        df = montar_relatorio(
+            registros,
+            periodos_relatorio if selecao != "__LEGADO__" else {},
+            incluir_sem_leitura=incluir_sem_leitura and selecao != "__LEGADO__",
+        )
+
+    if df.empty:
         st.info("Nenhum dado disponível para o filtro selecionado.")
         return
 
-    dados = []
-
-    for registro in registros:
-        dados.append(
-            {
-                "Data/Hora": registro.get("data_hora"),
-                "Matrícula": registro.get("matricula"),
-                "Crachá": registro.get("id_cracha"),
-                "Nome": registro.get("nome"),
-                "Setor": registro.get("setor"),
-                "Cesta Normal": registro.get("cesta_normal"),
-                "Cesta Especial": registro.get("cesta_especial"),
-                "Resultado": registro.get("resultado"),
-                "Motivo": registro.get("motivo"),
-            }
-        )
-
-    df = pd.DataFrame(
-        dados
-    )
-
-    retiradas = df[
-        df["Resultado"] == "LIBERADO"
-    ].copy()
+    retiradas = df[df["Situação"].str.startswith("RETIROU")]
+    perderam = df[df["Situação"].str.startswith("PERDEU")]
+    parciais = df[df["Situação"] == "RETIROU (PERDA PARCIAL)"]
 
     col1, col2, col3 = st.columns(3)
-
     with col1:
-        st.metric(
-            "👥 Pessoas que retiraram",
-            len(retiradas),
-        )
-
+        st.metric("👥 Pessoas que retiraram", len(retiradas))
     with col2:
-        st.metric(
-            "🥫 Cestas normais",
-            int(retiradas["Cesta Normal"].fillna(0).sum())
-            if not retiradas.empty
-            else 0,
-        )
-
+        st.metric("🥫 Cestas normais", int(retiradas["Cesta Normal"].sum()))
     with col3:
-        st.metric(
-            "⭐ Cestas especiais",
-            int(retiradas["Cesta Especial"].fillna(0).sum())
-            if not retiradas.empty
-            else 0,
-        )
+        st.metric("⭐ Cestas especiais", int(retiradas["Cesta Especial"].sum()))
+
+    col4, col5, col6 = st.columns(3)
+    with col4:
+        st.metric("🚫 Perderam a cesta", len(perderam))
+    with col5:
+        st.metric("⚠️ Retiraram com perda parcial", len(parciais))
+    with col6:
+        st.metric("📋 Total de pessoas no relatório", len(df))
+
+    situacao = st.selectbox(
+        "Situação",
+        ["Todas", "Retiraram", "Retiraram com perda parcial", "Perderam a cesta"],
+        key="relatorio_situacao",
+    )
+
+    if situacao == "Retiraram":
+        df_exibir = retiradas
+    elif situacao == "Retiraram com perda parcial":
+        df_exibir = parciais
+    elif situacao == "Perderam a cesta":
+        df_exibir = perderam
+    else:
+        df_exibir = df
+
+    if selecao != "__TODOS__":
+        df_exibir = df_exibir.drop(columns=["Período"])
+
+    st.caption(f"{len(df_exibir)} linha(s).")
 
     st.dataframe(
-        retiradas,
+        df_exibir,
         use_container_width=True,
         hide_index=True,
     )
 
-    csv = retiradas.to_csv(
+    csv = df_exibir.to_csv(
         index=False,
         encoding="utf-8-sig",
     )
@@ -2576,9 +2841,9 @@ def tela_relatorios():
     )
 
     st.download_button(
-        "⬇️ Exportar retiradas",
+        "⬇️ Exportar relatório",
         data=csv,
-        file_name=f"relatorio_retiradas_{nome_seguro}.csv",
+        file_name=f"relatorio_{nome_seguro}.csv",
         mime="text/csv",
         use_container_width=True,
     )
@@ -2783,8 +3048,7 @@ elif pagina == "Usuários" and eh_admin:
 elif pagina == "Relatórios" and eh_admin:
     tela_relatorios()
 else:
-    st.session_state.pagina = "Terminal"
-    st.rerun()
+    tela_terminal()
 
 
 # ============================================================
