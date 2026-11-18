@@ -61,8 +61,31 @@ def _texto_valido(valor):
 
 
 def _tem_perda(valor):
-    """Qualquer texto válido na coluna Perde bloqueia a retirada."""
+    """Há algum motivo escrito na coluna Perde."""
     return bool(_texto_valido(valor))
+
+
+def _tem_cesta(colaborador):
+    return (
+        _inteiro(colaborador.get("cesta_normal")) > 0
+        or _inteiro(colaborador.get("cesta_especial")) > 0
+    )
+
+
+def perdeu_todas(colaborador):
+    """Perda total: motivo na coluna Perde e nenhuma cesta restante.
+    Só nesse caso a retirada é bloqueada."""
+    return _tem_perda(colaborador.get("perde")) and not _tem_cesta(colaborador)
+
+
+def perda_parcial(colaborador):
+    """Perda parcial: motivo na coluna Perde, mas ainda com cesta para
+    retirar (as colunas Normal/Especial já trazem o que restou).
+    Devolve o motivo, ou "" se não for perda parcial."""
+    motivo = _texto_valido(colaborador.get("perde"))
+    if motivo and _tem_cesta(colaborador):
+        return motivo
+    return ""
 
 
 # ============================================================
@@ -775,9 +798,11 @@ def liberar_cesta(colaborador_id, tipo_identificacao):
         colaborador.get("perde")
     )
 
-    # A coluna Perde contém o motivo textual. O bloqueio é feito antes
-    # da RPC para impedir baixa de estoque ou confirmação indevida.
-    if motivo_perda:
+    # A coluna Perde contém o motivo textual. Só bloqueia quando a pessoa
+    # perdeu todas as cestas (Normal e Especial zeradas). Com perda
+    # parcial, entrega o que restou nas colunas Normal/Especial.
+    # O bloqueio é feito antes da RPC para impedir baixa de estoque.
+    if motivo_perda and perdeu_todas(colaborador):
         registrar_historico(
             tipo_identificacao=tipo_identificacao,
             id_cracha=colaborador.get("id_mat"),
@@ -828,6 +853,10 @@ def liberar_cesta(colaborador_id, tipo_identificacao):
                 "resultado": "ERRO",
                 "motivo": "Resposta inválida da função de liberação.",
             }
+
+        if motivo_perda:
+            dados = dict(dados)
+            dados["perda_parcial"] = motivo_perda
 
         return dados
 
@@ -906,7 +935,7 @@ def obter_indicadores(periodo_id=None):
 def _classificar_colaborador(colaborador):
     cesta_normal = _inteiro(colaborador.get("cesta_normal"))
     cesta_especial = _inteiro(colaborador.get("cesta_especial"))
-    perdeu = _tem_perda(colaborador.get("perde"))
+    perdeu = perdeu_todas(colaborador)
     retirou = _eh_sim(colaborador.get("confirmacao_retirada"))
 
     if retirou:
@@ -1000,9 +1029,13 @@ def obter_resumo_consulta(periodo_id=None, registros=None):
     retirados = 0
     perderam = 0
     sem_direito = 0
+    perda_parcial_total = 0
 
     for colaborador in todos:
         situacao = colaborador.get("situacao")
+
+        if situacao in {"PENDENTE", "RETIRADO"} and perda_parcial(colaborador):
+            perda_parcial_total += 1
 
         if situacao == "PENDENTE":
             pendentes += 1
@@ -1021,6 +1054,7 @@ def obter_resumo_consulta(periodo_id=None, registros=None):
         "pendentes": pendentes,
         "retirados": retirados,
         "perderam": perderam,
+        "perda_parcial": perda_parcial_total,
         "sem_direito": sem_direito,
         "nao_autorizados": perderam + sem_direito,
     }
