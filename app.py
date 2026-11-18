@@ -162,14 +162,52 @@ def tocar_audio_resultado(resultado):
     if st.session_state.get("ultimo_audio_operacao") == identificador:
         return
 
-    st.audio(
+    reproduzir_audio_oculto(
         audio["dados"],
-        format=audio.get("mime_type") or "audio/mpeg",
-        autoplay=True,
+        audio.get("mime_type") or "audio/mpeg",
+        identificador,
     )
 
     st.session_state.ultimo_audio_operacao = identificador
     st.session_state.ultima_frase_audio = TIPOS_AUDIO[tipo]["titulo"]
+
+
+def reproduzir_audio_oculto(dados, mime_type, identificador):
+    """Toca o áudio sem mostrar nenhum player na tela.
+
+    Antes era usado st.audio, que desenha a barra com a duração.
+    Agora o som é criado direto na página por um script invisível
+    (altura 0), sem nenhum elemento visual.
+    """
+    conteudo = base64.b64encode(bytes(dados)).decode("ascii")
+    mime = escape(str(mime_type or "audio/mpeg"))
+
+    components.html(
+        f"""
+        <script>
+        // {escape(identificador)}
+        (function () {{
+            const src = "data:{mime};base64,{conteudo}";
+            try {{
+                // Toca pela página principal: ela já teve interação do
+                // operador (leitura do crachá), então o navegador permite.
+                const janela = window.parent;
+                if (janela.__audioCesta) {{
+                    try {{ janela.__audioCesta.pause(); }} catch (e) {{}}
+                }}
+                const audio = new janela.Audio(src);
+                janela.__audioCesta = audio;
+                audio.play().catch(function () {{
+                    new Audio(src).play().catch(function () {{}});
+                }});
+            }} catch (e) {{
+                new Audio(src).play().catch(function () {{}});
+            }}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
 
 
 def render_preview_audio(dados, mime_type="audio/mpeg"):
@@ -801,6 +839,15 @@ render_html(
         box-shadow: 0 2px 6px rgba(16, 24, 40, .18);
     }}
     section[data-testid="stSidebar"] .stButton {{ margin-bottom: -6px; }}
+
+    /* Scripts invisíveis (áudio e foco do campo): sem ocupar espaço. */
+    div[data-testid="stElementContainer"]:has(> iframe[height="0"]),
+    div.element-container:has(> iframe[height="0"]) {{
+        height: 0 !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        overflow: hidden !important;
+    }}
 
     .rodape {{
         text-align: center; color: {CORES['secundario']}; font-size: 9px; margin-top: 5px;
