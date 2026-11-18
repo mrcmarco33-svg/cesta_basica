@@ -27,6 +27,8 @@ from database.database import (
     reabrir_entrega,
     iniciar_nova_entrega,
     registrar_historico,
+    perdeu_todas,
+    perda_parcial,
 )
 from services.importador import importar_excel
 from services.identificacao import (
@@ -562,6 +564,9 @@ def preencher_dados_colaborador(resultado_liberacao, colaborador):
     # Usados pelo botão "Atualizar crachá".
     resultado_liberacao["colaborador_id"] = colaborador.get("id")
     resultado_liberacao["id_mat"] = colaborador.get("id_mat")
+    motivo_parcial = perda_parcial(colaborador)
+    if motivo_parcial:
+        resultado_liberacao["perda_parcial"] = motivo_parcial
     return resultado_liberacao
 
 
@@ -627,11 +632,14 @@ def obter_motivo_perda(colaborador):
 def processar_colaborador(colaborador, tipo_identificacao, cracha_cadastrado=False):
     """
     Regra central da retirada.
-    A coluna Perde SEMPRE tem prioridade sobre cadastro de crachá e liberação.
+    Perda TOTAL (motivo na coluna Perde e Normal/Especial zeradas) tem
+    prioridade sobre cadastro de crachá e liberação.
+    Perda PARCIAL (motivo na Perde, mas ainda com cesta) segue a retirada
+    normal, entregando só o que restou.
     """
     perde = obter_motivo_perda(colaborador)
 
-    if perde:
+    if perde and perdeu_todas(colaborador):
         # Chama a regra do banco para manter o histórico da tentativa.
         resultado_liberacao = liberar_cesta(
             colaborador["id"],
@@ -766,10 +774,11 @@ def processar_identificacao():
         colaborador = resultado["dados"]
 
         # ----------------------------------------------------
-        # 1º: COLUNA PERDE TEM PRIORIDADE ABSOLUTA
+        # 1º: PERDA TOTAL TEM PRIORIDADE ABSOLUTA
+        # (perda parcial segue para a retirada do que restou)
         # ----------------------------------------------------
         perde = obter_motivo_perda(colaborador)
-        if perde:
+        if perde and perdeu_todas(colaborador):
             resultado_liberacao = liberar_cesta(
                 colaborador["id"],
                 resultado["identificacao"],
@@ -1003,6 +1012,13 @@ def tela_consulta():
     with col5:
         st.metric("⚪ Sem direito", resumo.get("sem_direito", 0))
 
+    if resumo.get("perda_parcial"):
+        st.caption(
+            f"⚠️ {resumo['perda_parcial']} colaborador(es) com perda parcial "
+            "(perderam uma cesta, mas têm direito à que restou). "
+            "Eles estão contados em Retirados/Pendentes."
+        )
+
     st.divider()
     st.subheader("🔍 Consultar colaborador")
 
@@ -1117,7 +1133,12 @@ def tela_consulta():
                 dados.get("perde")
             )
 
-            if motivo:
+            if motivo and status in {"PENDENTE", "RETIRADO"}:
+                st.warning(
+                    f"⚠️ **Perda parcial:** {motivo} — tem direito somente "
+                    "às cestas indicadas acima."
+                )
+            elif motivo:
                 st.error(
                     f"⚠️ **Motivo da perda:** {motivo}"
                 )
@@ -1140,6 +1161,12 @@ def tela_consulta():
                 "Cesta Normal": int(colaborador.get("cesta_normal") or 0),
                 "Cesta Especial": int(colaborador.get("cesta_especial") or 0),
                 "Status": colaborador.get("situacao"),
+                "Perda parcial": (
+                    "SIM"
+                    if colaborador.get("situacao") in {"PENDENTE", "RETIRADO"}
+                    and texto_campo(colaborador.get("perde"))
+                    else ""
+                ),
                 "Data/Hora Retirada": texto_campo(
                     colaborador.get("data_hora_retirada")
                 ),
@@ -1488,6 +1515,19 @@ def render_resultado_terminal(resultado):
             st.metric("🥫 Cesta normal", resultado.get("cesta_normal", 0))
         with col2:
             st.metric("⭐ Cesta especial", resultado.get("cesta_especial", 0))
+
+        motivo_parcial = texto_campo(resultado.get("perda_parcial"))
+        if motivo_parcial:
+            render_html(
+                f"""
+                <div class="aguardando-card">
+                    ⚠️ PERDEU PARTE DAS CESTAS — entregar somente a quantidade acima
+                    <div style="font-size:15px; font-weight:700; margin-top:3px;">
+                        Motivo: {valor_seguro(motivo_parcial)}
+                    </div>
+                </div>
+                """
+            )
 
         if resultado.get("cracha_cadastrado"):
             st.success("🪪 Crachá cadastrado e cesta liberada automaticamente.")
