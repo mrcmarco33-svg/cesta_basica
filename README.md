@@ -62,3 +62,20 @@ streamlit run app.py
   Supabase **antes** de publicar o código que depende dele.
 - Logs de erro e botão **Reboot**: share.streamlit.io → seu app →
   **Manage app**.
+
+## 🎄 App de Cestas Natalinas (`natal_app.py`)
+
+É um segundo app, separado do principal. Usa o mesmo Supabase, os mesmos
+usuários e o mesmo cadastro de crachás, mas tem tabelas próprias
+(`natal_*`). Nada nele altera as cestas básicas.
+
+**Publicar (uma vez):**
+1. Supabase → SQL Editor → rode `sql/003_natal.sql`.
+2. share.streamlit.io → **Create app** → repositório `cesta_basica`,
+   branch `main`, arquivo principal **`natal_app.py`**. Em *Advanced
+   settings → Secrets*, cole os mesmos Secrets do app principal.
+3. No app: ⚙️ Campanha → criar "Natal 2026" → 📋 Lista → importar a
+   planilha (coluna Matrícula obrigatória; Nome e Setor opcionais).
+
+Cada pessoa da lista tem direito a 1 cesta natalina. O terminal reconhece
+o crachá cadastrado no app principal ou a matrícula digitada.
